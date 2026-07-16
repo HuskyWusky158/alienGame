@@ -3,12 +3,15 @@ import './style.css';
 
 /* ---------- renderer / scene / camera ---------- */
 
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+if (isTouchDevice) document.body.classList.add('touch-device');
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 600);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, isTouchDevice ? 1.5 : 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
@@ -121,7 +124,8 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 /* ---------- terrain mesh ---------- */
 
 function buildTerrain() {
-  const geo = new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE, 140, 140);
+  const segments = isTouchDevice ? 70 : 140;
+  const geo = new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE, segments, segments);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
   const colors = new Float32Array(pos.count * 3);
@@ -166,7 +170,7 @@ function pointSegDist(px, pz, x1, z1, x2, z2) {
 }
 
 function buildRocks() {
-  const count = 55;
+  const count = isTouchDevice ? 32 : 55;
   const geo = new THREE.IcosahedronGeometry(1, 0);
   const mat = new THREE.MeshStandardMaterial({ color: 0x6b3a28, roughness: 1, flatShading: true });
   const mesh = new THREE.InstancedMesh(geo, mat, count);
@@ -537,6 +541,27 @@ window.addEventListener('keydown', (e) => {
   if (key === 'f' && !e.repeat) lookingAtCamera = !lookingAtCamera;
 });
 window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
+
+document.querySelectorAll('.dpad-btn').forEach((btn) => {
+  const key = btn.dataset.key;
+  const press = (e) => {
+    e.preventDefault();
+    keys[key] = true;
+  };
+  const release = (e) => {
+    e.preventDefault();
+    keys[key] = false;
+  };
+  btn.addEventListener('pointerdown', press);
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+  btn.addEventListener('pointerleave', release);
+});
+
+document.getElementById('look-btn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  lookingAtCamera = !lookingAtCamera;
+});
 
 /* ---------- portfolio panel ---------- */
 

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Mars Alien Explorer</title>
   </head>
   <body>
@@ -18,6 +18,16 @@
     <div id="portfolio-panel">
       <h2 id="portfolio-title">Caitlin Bax &mdash; Projects</h2>
       <div id="portfolio-grid"></div>
+    </div>
+
+    <div id="touch-controls">
+      <div id="dpad">
+        <button class="dpad-btn dpad-up" data-key="arrowup" aria-label="Walk forward">&#9650;</button>
+        <button class="dpad-btn dpad-left" data-key="arrowleft" aria-label="Turn left">&#9664;</button>
+        <button class="dpad-btn dpad-right" data-key="arrowright" aria-label="Turn right">&#9654;</button>
+        <button class="dpad-btn dpad-down" data-key="arrowdown" aria-label="Walk back">&#9660;</button>
+      </div>
+      <button id="look-btn" aria-label="Look at camera">LOOK</button>
     </div>
 
     <script type="module" src="/src/main.js"></script>
