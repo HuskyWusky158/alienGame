@@ -1,10 +1,10 @@
 {
-  "name": "willgethiredwiththis",
+  "name": "threejs-game",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -12,6 +12,6 @@
     "vite": "^8.1.1"
   },
   "dependencies": {
-    "three": "^0.185.1"
+    "three": "^0.150.1"
   }
 }

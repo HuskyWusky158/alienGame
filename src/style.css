@@ -8,9 +8,143 @@ html, body, #app {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #0a0a0f;
+  background: #1a0f0a;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 canvas {
   display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  color: #fdeee0;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+  z-index: 10;
+}
+
+#hub-list {
+  font-size: 15px;
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+#hub-list .hub-row {
+  opacity: 0.55;
+}
+
+#hub-list .hub-row.found {
+  opacity: 1;
+}
+
+#hub-list .hub-row .mark {
+  display: inline-block;
+  width: 18px;
+}
+
+#controls-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+#banner {
+  position: fixed;
+  top: 30%;
+  left: 50%;
+  transform: translate(-50%, -20px);
+  color: #fff6ec;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s ease, transform 0.6s ease;
+  z-index: 20;
+  text-align: center;
+}
+
+#banner.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+#portfolio-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 16px);
+  width: min(920px, calc(100% - 48px));
+  max-height: 46vh;
+  overflow-y: auto;
+  background: rgba(12, 10, 18, 0.82);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(111, 184, 255, 0.35);
+  border-radius: 14px;
+  padding: 18px 22px;
+  color: #f2f6fb;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  z-index: 30;
+}
+
+#portfolio-panel.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+#portfolio-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  background: linear-gradient(90deg, #6fb8ff, #b266ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+#portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.project-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.project-card h3 {
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: #cfe8ff;
+}
+
+.project-card p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #c7c9d4;
+  margin-bottom: 10px;
+}
+
+.project-card a {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0c0a12;
+  background: linear-gradient(90deg, #6fb8ff, #8fd4ff);
+  padding: 6px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.project-card a:hover {
+  filter: brightness(1.1);
 }
