@@ -473,14 +473,14 @@ HUBS.forEach((hub) => {
 
 function buildAlien() {
   const alien = new THREE.Group();
-  const skinColor = 0x62d9a6;
+  const skinColor = 0x8fd400;
 
   const hipY = 0.95;
   const legs = [];
   [-0.22, 0.22].forEach((x) => {
     const legGroup = new THREE.Group();
     legGroup.position.set(x, hipY, 0);
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, 0.95, 8), stdMat(0x3fae82));
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, 0.95, 8), stdMat(0x6ea600));
     leg.position.y = -0.475;
     legGroup.add(leg);
     alien.add(legGroup);
@@ -497,18 +497,18 @@ function buildAlien() {
     const armGroup = new THREE.Group();
     armGroup.position.set(x, shoulderY, 0);
     armGroup.rotation.z = i === 0 ? 0.2 : -0.2;
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.75, 8), stdMat(0x3fae82));
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.75, 8), stdMat(0x6ea600));
     arm.position.y = -0.375;
     armGroup.add(arm);
     alien.add(armGroup);
     arms.push(armGroup);
   });
 
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.5, 10), stdMat(0x3fae82));
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.5, 10), stdMat(0x6ea600));
   neck.position.y = 2.9;
   alien.add(neck);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.95, 24, 20), stdMat(0x86e9c2, { roughness: 0.45 }));
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.95, 24, 20), stdMat(0xbdf24a, { roughness: 0.45 }));
   head.position.y = 3.85;
   head.scale.set(1.05, 1.2, 0.95);
   alien.add(head);
@@ -724,9 +724,11 @@ function animate() {
   }
   sp.needsUpdate = true;
 
-  const behindOffset = new THREE.Vector3(0, 4.8, 8.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), alien.rotation.y);
-  const desiredCamPos = alien.position.clone().add(behindOffset);
-  camera.position.lerp(desiredCamPos, 0.08);
+  if (!lookingAtCamera) {
+    const behindOffset = new THREE.Vector3(0, 4.8, 8.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), alien.rotation.y);
+    const desiredCamPos = alien.position.clone().add(behindOffset);
+    camera.position.lerp(desiredCamPos, 0.08);
+  }
   camLookTarget.lerp(alien.position.clone().add(new THREE.Vector3(0, 3.2, 0)), 0.15);
   camera.lookAt(camLookTarget);
 
