@@ -31,7 +31,7 @@ const MAP_SIZE = 220;
 const MAP_HALF = MAP_SIZE / 2 - 6;
 
 const HUBS = [
-  { key: 'outpost', name: 'Research Outpost', x: 75, z: -75, color: 0x6fb8ff, trigger: 15 },
+  { key: 'outpost', name: "Caitlin's Projects", x: 75, z: -75, color: 0x6fb8ff, trigger: 15 },
   { key: 'cavern', name: 'Crystal Cavern', x: -75, z: -75, color: 0xb266ff, trigger: 15 },
   { key: 'ruins', name: 'Ancient Ruins', x: 75, z: 75, color: 0xe0a35a, trigger: 15 },
   { key: 'crash', name: 'Crash Site', x: -75, z: 75, color: 0xff6a4a, trigger: 15 },
