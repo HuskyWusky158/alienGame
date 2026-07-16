@@ -246,9 +246,9 @@ function makeLabelSprite(text, colorHex) {
 
 function buildSignposts() {
   HUBS.forEach((hub) => {
-    const angle = Math.atan2(hub.x, hub.z) + Math.PI;
-    const px = Math.sin(angle) * 9;
-    const pz = Math.cos(angle) * 9;
+    const dist = Math.hypot(hub.x, hub.z);
+    const px = (hub.x / dist) * 9;
+    const pz = (hub.z / dist) * 9;
     const baseY = getTerrainHeight(px, pz);
     const pole = new THREE.Mesh(
       new THREE.CylinderGeometry(0.06, 0.06, 3, 8),
@@ -523,6 +523,12 @@ function buildAlien() {
     eye.position.set(x, 3.82, -0.6);
     alien.add(eye);
   });
+
+  const mouthGeo = new THREE.TorusGeometry(0.22, 0.045, 8, 20, Math.PI);
+  mouthGeo.rotateZ(Math.PI);
+  const mouth = new THREE.Mesh(mouthGeo, stdMat(0x1a1410, { roughness: 0.4 }));
+  mouth.position.set(0, 3.55, -0.72);
+  alien.add(mouth);
 
   alien.position.set(0, getTerrainHeight(0, 0), 0);
   scene.add(alien);
