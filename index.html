@@ -9,11 +9,32 @@
     <div id="app"></div>
 
     <div id="hud">
+      <div class="mission-chip"><span class="live-dot"></span><span id="location-label">MARS SURFACE &middot; SOL 01</span></div>
       <div id="hub-list"></div>
-      <div id="controls-hint">WASD / Arrow Keys to walk &middot; A/D or &larr;/&rarr; to turn &middot; F to look at you</div>
+      <div id="controls-hint">WASD / ARROWS move &middot; HOLD SPACE high-thrust climb &middot; E exit / board &middot; F look back</div>
+    </div>
+
+    <div id="telemetry" aria-label="Rover telemetry">
+      <div class="telemetry-cell"><span class="telemetry-label">GRAVITY</span><strong id="gravity-value">0.38 G</strong></div>
+      <div class="telemetry-cell"><span class="telemetry-label">SPEED</span><strong id="speed-value">00</strong><small> KM/H</small></div>
+      <div class="telemetry-cell"><span class="telemetry-label">ELEV</span><strong id="elevation-value">+00.0</strong><small> M</small></div>
+    </div>
+
+    <button id="audio-toggle" type="button" aria-label="Start Mars soundscape" aria-pressed="true">
+      <span class="audio-pulse" aria-hidden="true"></span>
+      AUDIO <strong id="audio-state">START</strong>
+    </button>
+    <div id="shuttle-status" aria-live="polite">
+      <span id="shuttle-status-text">SPACE BUS · MARS 10 SEC</span>
+      <div class="shuttle-route" aria-hidden="true">
+        <span>MARS</span>
+        <span class="shuttle-route-line"><i id="shuttle-route-bus"></i></span>
+        <span>MOON</span>
+      </div>
     </div>
 
     <div id="banner"></div>
+    <div id="interaction-prompt" aria-live="polite"></div>
 
     <div id="portfolio-panel">
       <h2 id="portfolio-title">Caitlin Bax &mdash; Projects</h2>
@@ -32,7 +53,9 @@
         <button class="dpad-btn dpad-right" data-key="arrowright" aria-label="Turn right">&#9654;</button>
         <button class="dpad-btn dpad-down" data-key="arrowdown" aria-label="Walk back">&#9660;</button>
       </div>
+      <button id="action-btn" aria-label="Exit, board, or interact">USE</button>
       <button id="look-btn" aria-label="Look at camera">LOOK</button>
+      <button id="jump-btn" aria-label="Hold high-thrust boost">BOOST</button>
     </div>
 
     <script type="module" src="/src/main.js"></script>
