@@ -271,12 +271,29 @@ HUBS.forEach((hub) => {
   hub.normal = normalFromSurfaceCoords(hub.x, hub.z);
 });
 const NIGHTFALL_CAVE = HUBS.find((hub) => hub.key === 'nightfall');
-const CAVE_TUNNEL_LENGTH = 34;
-const CAVE_INNER_RADIUS = 6;
+const CAVE_INNER_RADIUS = 6.4;
 NIGHTFALL_CAVE.heading = START_NORMAL.clone()
   .addScaledVector(NIGHTFALL_CAVE.normal, -START_NORMAL.dot(NIGHTFALL_CAVE.normal))
   .normalize();
 NIGHTFALL_CAVE.right = NIGHTFALL_CAVE.heading.clone().cross(NIGHTFALL_CAVE.normal).normalize();
+const CAVE_INWARD_HEADING = NIGHTFALL_CAVE.heading.clone().multiplyScalar(-1);
+const CAVE_ROUTE_POINTS = [
+  new THREE.Vector3(0, 0.1, 3),
+  new THREE.Vector3(0, -0.3, -8),
+  new THREE.Vector3(4.8, -4.8, -25),
+  new THREE.Vector3(-5.5, -11.5, -47),
+  new THREE.Vector3(6.2, -19.5, -72),
+  new THREE.Vector3(2.5, -28.5, -98),
+  new THREE.Vector3(-6.5, -37.2, -126),
+  new THREE.Vector3(0, -44.2, -151),
+  new THREE.Vector3(0, -47, -168),
+];
+const CAVE_ROUTE_CURVE = new THREE.CatmullRomCurve3(CAVE_ROUTE_POINTS, false, 'centripetal', 0.45);
+const CAVE_ROUTE_LENGTH = CAVE_ROUTE_CURVE.getLength();
+const CAVE_CHAMBER_CENTER = new THREE.Vector3(0, -47, -207);
+const CAVE_CHAMBER_RADIUS_X = 58;
+const CAVE_CHAMBER_RADIUS_Z = 72;
+const CAVE_TUNNEL_MAX_SPEED = 8.5;
 SPEAKER_STATIONS.forEach((station) => {
   station.normal = normalFromSurfaceCoords(station.x, station.z);
   station.hearingRadius = 44;
@@ -1561,7 +1578,7 @@ function buildRocks() {
     const normal = randomUnitVector();
     if (geodesicDistance(normal, START_NORMAL) < 12) continue;
     if (HUBS.some((hub) => geodesicDistance(normal, hub.normal) < 11)) continue;
-    if (geodesicDistance(normal, NIGHTFALL_CAVE.normal) < CAVE_TUNNEL_LENGTH / 2 + 8) continue;
+    if (geodesicDistance(normal, NIGHTFALL_CAVE.normal) < 25) continue;
     if (SPEAKER_STATIONS.some((station) => geodesicDistance(normal, station.normal) < 4.2)) continue;
     if (geodesicDistance(normal, MARS_PORT.normal) < 8) continue;
     const scale = 0.28 + Math.pow(Math.random(), 2) * 1.75;
@@ -2025,27 +2042,67 @@ function updateMarsImpactBasin(dt, time, activeMarsNormal) {
   marsImpactBasinRuntime.landmarkLabel.material.opacity = 0.46 + Math.sin(time * 0.74) * 0.07 + marsImpactBasinProximity * 0.34;
 }
 
-/* ---------- curved paths & spawn signs ---------- */
+/* ---------- dirt pathways & spawn signs ---------- */
 
-function buildPathMarkers(hub) {
+function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 1) {
   const distance = geodesicDistance(START_NORMAL, hub.normal);
-  const steps = Math.max(4, Math.floor(distance / 3.4));
-  const geometry = new THREE.CylinderGeometry(0.58, 0.58, 0.07, 12);
-  const material = new THREE.MeshStandardMaterial({ color: hub.color, emissive: hub.color, emissiveIntensity: 0.6, roughness: 0.65 });
-  const mesh = new THREE.InstancedMesh(geometry, material, steps);
-  const dummy = new THREE.Object3D();
-  for (let i = 0; i < steps; i++) {
-    const normal = slerpNormals(START_NORMAL, hub.normal, (i + 1) / (steps + 1));
-    dummy.position.copy(surfaceWorldPosition(normal, 0.055));
-    dummy.quaternion.setFromUnitVectors(UP, normal);
-    dummy.scale.setScalar(1);
-    dummy.updateMatrix();
-    mesh.setMatrixAt(i, dummy.matrix);
+  const steps = Math.max(24, Math.ceil(distance / 0.72));
+  const vertices = [];
+  const colors = [];
+  const indices = [];
+  const forward = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const trailColor = new THREE.Color(color);
+  const variedColor = new THREE.Color();
+  for (let index = 0; index <= steps; index++) {
+    const routeRatio = THREE.MathUtils.lerp(0.025, 0.975, index / steps);
+    const normal = slerpNormals(START_NORMAL, hub.normal, routeRatio);
+    forward.copy(hub.normal).addScaledVector(normal, -hub.normal.dot(normal)).normalize();
+    right.crossVectors(forward, normal).normalize();
+    const edgeNoise = Math.sin(index * 1.73 + hub.x * 0.013) * 0.12 + Math.sin(index * 0.47 + hub.z * 0.021) * 0.08;
+    [-1, 1].forEach((side) => {
+      const sideDistance = lateralOffset + side * halfWidth * (1 + edgeNoise * side);
+      const sideNormal = stepWorldNormal(normal, right, sideDistance, PLANET_RADIUS);
+      const position = surfaceWorldPosition(sideNormal, lift);
+      vertices.push(position.x, position.y, position.z);
+      variedColor.copy(trailColor).multiplyScalar(0.86 + ((index * 17 + (side > 0 ? 5 : 1)) % 9) * 0.018);
+      colors.push(variedColor.r, variedColor.g, variedColor.b);
+    });
+    if (index < steps) {
+      const offset = index * 2;
+      indices.push(offset, offset + 2, offset + 1, offset + 2, offset + 3, offset + 1);
+    }
   }
-  mesh.instanceMatrix.needsUpdate = true;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 1,
+      metalness: 0,
+      transparent: opacity < 1,
+      opacity,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    })
+  );
   scene.add(mesh);
+  return mesh;
 }
-HUBS.forEach(buildPathMarkers);
+
+function buildDirtPath(hub) {
+  buildTrailRibbon(hub, 1.55, 0, 0.11, 0x7f3824, 0.96);
+  buildTrailRibbon(hub, 0.15, -0.72, 0.145, 0x3f211c, 0.78);
+  buildTrailRibbon(hub, 0.15, 0.72, 0.145, 0x3f211c, 0.78);
+}
+HUBS.forEach(buildDirtPath);
 
 function makeLabelSprite(text, colorHex) {
   const canvas = document.createElement('canvas');
@@ -2066,17 +2123,31 @@ function makeLabelSprite(text, colorHex) {
 }
 
 function buildSignposts() {
-  HUBS.forEach((hub) => {
+  const contactHub = HUBS.find((hub) => hub.key === 'cavern');
+  const nightfallHub = HUBS.find((hub) => hub.key === 'nightfall');
+  const sharedTarget = slerpNormals(nightfallHub.normal, contactHub.normal, 0.35);
+  const signposts = HUBS
+    .filter((hub) => hub.key !== 'cavern' && hub.key !== 'nightfall')
+    .map((hub) => ({ hub, target: hub.normal, label: hub.name, color: hub.color }));
+  signposts.push({
+    hub: nightfallHub,
+    target: sharedTarget,
+    label: "CAITLIN'S CONTACT INFO",
+    color: 0xc37dff,
+    wide: true,
+  });
+  signposts.forEach(({ hub, target, label: signLabel, color, wide }) => {
     const group = new THREE.Group();
-    const normal = slerpNormals(START_NORMAL, hub.normal, 7 / geodesicDistance(START_NORMAL, hub.normal));
+    const normal = slerpNormals(START_NORMAL, target, 7 / geodesicDistance(START_NORMAL, target));
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.8 }));
     pole.position.y = 1.1;
     group.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.5), new THREE.MeshStandardMaterial({ color: hub.color, emissive: hub.color, emissiveIntensity: 0.4, side: THREE.DoubleSide }));
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(wide ? 1.42 : 0.85, 0.5), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4, side: THREE.DoubleSide }));
     flag.position.set(0.42, 1.85, 0);
     group.add(flag);
-    const label = makeLabelSprite(hub.name, '#fff3e6');
+    const label = makeLabelSprite(signLabel, '#fff3e6');
     label.position.set(0, 2.75, 0);
+    if (wide) label.scale.set(8.5, 1.05, 1);
     group.add(label);
     placeSurfaceGroup(group, normal);
   });
@@ -2413,172 +2484,576 @@ function buildCrashSite(hub) {
   return { group, light, smoke, smokeBases: bases, smokeSpeeds: speeds };
 }
 
-function buildNightfallCave(hub) {
-  const group = new THREE.Group();
-  group.name = 'Nightfall Cave · drive-through tunnel';
-  group.position.copy(surfaceWorldPosition(hub.normal, -0.18));
-  group.quaternion.copy(surfaceVehicleQuaternion(hub.normal, hub.heading));
-  scene.add(group);
-
-  const tunnelMaterial = new THREE.MeshStandardMaterial({
-    color: 0x080403,
-    roughness: 1,
-    metalness: 0,
-    side: THREE.BackSide,
-  });
-  const tunnel = new THREE.Mesh(
-    new THREE.CylinderGeometry(CAVE_INNER_RADIUS, CAVE_INNER_RADIUS, CAVE_TUNNEL_LENGTH, 28, 1, true),
-    tunnelMaterial
-  );
-  tunnel.rotation.x = Math.PI / 2;
-  tunnel.position.y = 0.08;
-  group.add(tunnel);
-
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(CAVE_INNER_RADIUS * 1.82, CAVE_TUNNEL_LENGTH),
-    new THREE.MeshStandardMaterial({ color: 0x160b08, roughness: 1, metalness: 0, side: THREE.DoubleSide })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = 0.09;
-  group.add(floor);
-
-  const segmentCount = 18;
-  const stonesPerArch = 11;
-  const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x3b1d16, roughness: 1, flatShading: true });
-  const rockShell = new THREE.InstancedMesh(rockGeometry, rockMaterial, segmentCount * stonesPerArch);
-  const rockDummy = new THREE.Object3D();
-  let rockIndex = 0;
-  for (let segment = 0; segment < segmentCount; segment++) {
-    const z = -CAVE_TUNNEL_LENGTH / 2 + (segment / (segmentCount - 1)) * CAVE_TUNNEL_LENGTH;
-    for (let stoneIndex = 0; stoneIndex < stonesPerArch; stoneIndex++) {
-      const angle = (stoneIndex / (stonesPerArch - 1)) * Math.PI;
-      const variation = 0.72 + Math.sin(segment * 4.37 + stoneIndex * 7.13) * 0.32;
-      const shellRadius = CAVE_INNER_RADIUS + 0.65 + variation * 0.45;
-      rockDummy.position.set(
-        Math.cos(angle) * shellRadius,
-        0.15 + Math.sin(angle) * shellRadius,
-        z
-      );
-      rockDummy.rotation.set(
-        angle * 0.21 + segment * 0.09,
-        segment * 0.61 + stoneIndex * 0.37,
-        angle - Math.PI / 2
-      );
-      rockDummy.scale.set(1.25 + variation * 0.55, 1.05 + variation * 0.48, 1.15 + variation * 0.7);
-      rockDummy.updateMatrix();
-      rockShell.setMatrixAt(rockIndex++, rockDummy.matrix);
+function createCaveRibbonGeometry(curve, width, segments, lift = 0) {
+  const vertices = [];
+  const uvs = [];
+  const indices = [];
+  const tangent = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  for (let index = 0; index <= segments; index++) {
+    const ratio = index / segments;
+    const point = curve.getPointAt(ratio);
+    tangent.copy(curve.getTangentAt(ratio)).normalize();
+    right.crossVectors(tangent, UP).normalize();
+    [-1, 1].forEach((side) => {
+      vertices.push(point.x + right.x * width * 0.5 * side, point.y + lift, point.z + right.z * width * 0.5 * side);
+      uvs.push(side < 0 ? 0 : 1, ratio * 12);
+    });
+    if (index < segments) {
+      const offset = index * 2;
+      indices.push(offset, offset + 2, offset + 1, offset + 2, offset + 3, offset + 1);
     }
   }
-  rockShell.instanceMatrix.needsUpdate = true;
-  group.add(rockShell);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
 
-  const portalMaterial = new THREE.MeshStandardMaterial({
-    color: 0x5a2d20,
-    emissive: 0x5d160a,
-    emissiveIntensity: 2.1,
-    roughness: 0.96,
-  });
-  const entrance = new THREE.Mesh(new THREE.TorusGeometry(CAVE_INNER_RADIUS + 0.35, 0.52, 8, 36), portalMaterial);
-  entrance.position.set(0, 0.15, -CAVE_TUNNEL_LENGTH / 2 - 0.15);
-  group.add(entrance);
-  const exit = entrance.clone();
-  exit.position.z = CAVE_TUNNEL_LENGTH / 2 + 0.15;
-  group.add(exit);
-
-  const portalGlowMaterial = new THREE.MeshBasicMaterial({
-    color: 0xff7547,
-    transparent: true,
-    opacity: 0.46,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-    toneMapped: false,
-  });
+function buildSubterraneanBear() {
+  const root = new THREE.Group();
+  root.name = 'Morrow · autonomous cave bear';
+  const fur = new THREE.MeshStandardMaterial({ color: 0x30201b, roughness: 0.98, flatShading: true });
+  const darkFur = new THREE.MeshStandardMaterial({ color: 0x140e0c, roughness: 1, flatShading: true });
+  const muzzleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d4a37, roughness: 0.94, flatShading: true });
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffd58a, toneMapped: false });
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(2.35, 1), fur);
+  body.scale.set(1.65, 1.05, 1.08);
+  body.position.y = 3.15;
+  root.add(body);
+  const shoulders = new THREE.Mesh(new THREE.IcosahedronGeometry(1.75, 1), fur);
+  shoulders.scale.set(1.42, 1.18, 1.05);
+  shoulders.position.set(0, 3.55, -1.85);
+  root.add(shoulders);
+  const head = new THREE.Group();
+  head.position.set(0, 4.35, -3.05);
+  root.add(head);
+  const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(1.38, 1), fur);
+  skull.scale.set(1.05, 0.92, 1.04);
+  head.add(skull);
+  const muzzle = new THREE.Mesh(new THREE.IcosahedronGeometry(0.78, 1), muzzleMaterial);
+  muzzle.scale.set(1.05, 0.66, 1.05);
+  muzzle.position.set(0, -0.28, -1.05);
+  head.add(muzzle);
+  const nose = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), darkFur);
+  nose.position.set(0, -0.18, -1.68);
+  head.add(nose);
   [-1, 1].forEach((side) => {
-    const portalGlow = new THREE.Mesh(
-      new THREE.RingGeometry(CAVE_INNER_RADIUS + 0.05, CAVE_INNER_RADIUS + 0.62, 40),
-      portalGlowMaterial
-    );
-    portalGlow.position.set(0, 0.15, side * (CAVE_TUNNEL_LENGTH / 2 + 0.22));
-    group.add(portalGlow);
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), darkFur);
+    ear.position.set(side * 0.86, 0.9, -0.05);
+    head.add(ear);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 7, 5), eyeMaterial);
+    eye.position.set(side * 0.48, 0.18, -1.12);
+    head.add(eye);
   });
+  const legs = [];
+  [[-1.35, -1.5], [1.35, -1.5], [-1.35, 1.55], [1.35, 1.55]].forEach(([x, z]) => {
+    const leg = new THREE.Group();
+    leg.position.set(x, 2.4, z);
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.54, 1.2, 3, 7), fur);
+    upper.position.y = -0.78;
+    leg.add(upper);
+    const paw = new THREE.Mesh(new THREE.IcosahedronGeometry(0.68, 1), darkFur);
+    paw.scale.set(1.08, 0.48, 1.35);
+    paw.position.set(0, -1.85, -0.22);
+    leg.add(paw);
+    root.add(leg);
+    legs.push(leg);
+  });
+  root.scale.setScalar(1.35);
+  return { root, body, head, legs };
+}
 
-  const guideMaterial = new THREE.MeshBasicMaterial({ color: 0xff7446, toneMapped: false });
-  for (let z = -12.5; z <= 12.5; z += 5) {
-    [-1, 1].forEach((side) => {
-      const guide = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.11, 0.8), guideMaterial);
-      guide.position.set(side * (CAVE_INNER_RADIUS - 1.05), 0.22, z);
-      group.add(guide);
-    });
-  }
+function buildNightfallCave(hub) {
+  const group = new THREE.Group();
+  group.name = 'Nightfall Descent · Undermars biosphere';
+  group.position.copy(surfaceWorldPosition(hub.normal, -0.18));
+  group.quaternion.copy(surfaceVehicleQuaternion(hub.normal, CAVE_INWARD_HEADING));
+  scene.add(group);
 
-  const entryLabel = makeLabelSprite('NIGHTFALL CAVE · ENTRANCE', '#ff9a6b');
-  entryLabel.position.set(0, 8.4, -CAVE_TUNNEL_LENGTH / 2 - 0.8);
-  entryLabel.scale.set(7.2, 1.15, 1);
+  const shellCurve = new THREE.CatmullRomCurve3(
+    CAVE_ROUTE_POINTS.map((point) => point.clone().add(new THREE.Vector3(0, CAVE_INNER_RADIUS - 0.45, 0))),
+    false,
+    'centripetal',
+    0.45
+  );
+  const tunnel = new THREE.Mesh(
+    new THREE.TubeGeometry(shellCurve, isTouchDevice ? 54 : 86, CAVE_INNER_RADIUS, isTouchDevice ? 10 : 14, false),
+    new THREE.MeshStandardMaterial({ color: 0x100907, roughness: 1, side: THREE.BackSide })
+  );
+  group.add(tunnel);
+
+  const road = new THREE.Mesh(
+    createCaveRibbonGeometry(CAVE_ROUTE_CURVE, CAVE_INNER_RADIUS * 1.34, isTouchDevice ? 55 : 90, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0x24130f, roughness: 0.98, metalness: 0.02, side: THREE.DoubleSide })
+  );
+  group.add(road);
+
+  const portalMaterial = new THREE.MeshStandardMaterial({ color: 0x5a2d20, emissive: 0x641b0d, emissiveIntensity: 2.4, roughness: 0.95 });
+  const entrance = new THREE.Mesh(new THREE.TorusGeometry(CAVE_INNER_RADIUS + 0.35, 0.58, 8, 40), portalMaterial);
+  entrance.position.copy(CAVE_ROUTE_POINTS[0]).add(new THREE.Vector3(0, CAVE_INNER_RADIUS - 0.35, 0.5));
+  group.add(entrance);
+  const entryLabel = makeLabelSprite('NIGHTFALL DESCENT · UNDERMARS', '#ff9f72');
+  entryLabel.position.copy(CAVE_ROUTE_POINTS[0]).add(new THREE.Vector3(0, CAVE_INNER_RADIUS * 2 + 1.4, 1));
+  entryLabel.scale.set(8.6, 1.28, 1);
   group.add(entryLabel);
-  const exitLabel = makeLabelSprite('NIGHTFALL CAVE · EXIT', '#ffc39f');
-  exitLabel.position.set(0, 8.4, CAVE_TUNNEL_LENGTH / 2 + 0.8);
-  exitLabel.scale.set(6.4, 1.05, 1);
-  group.add(exitLabel);
+
+  const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+  const tunnelRockMaterial = new THREE.MeshStandardMaterial({ color: 0x3b2019, roughness: 1, flatShading: true });
+  const tunnelRockCount = (isTouchDevice ? 26 : 40) * 8;
+  const tunnelRocks = new THREE.InstancedMesh(rockGeometry, tunnelRockMaterial, tunnelRockCount);
+  const dummy = new THREE.Object3D();
+  let tunnelRockIndex = 0;
+  const tunnelSegments = isTouchDevice ? 26 : 40;
+  for (let segment = 0; segment < tunnelSegments; segment++) {
+    const ratio = segment / (tunnelSegments - 1);
+    const point = CAVE_ROUTE_CURVE.getPointAt(ratio);
+    const tangent = CAVE_ROUTE_CURVE.getTangentAt(ratio).normalize();
+    const routeRight = new THREE.Vector3().crossVectors(tangent, UP).normalize();
+    for (let stoneIndex = 0; stoneIndex < 8; stoneIndex++) {
+      const angle = (stoneIndex / 7) * Math.PI;
+      const radius = CAVE_INNER_RADIUS + 0.35 + Math.sin(segment * 2.17 + stoneIndex * 4.3) * 0.42;
+      dummy.position.copy(point).addScaledVector(routeRight, Math.cos(angle) * radius).addScaledVector(UP, 0.25 + Math.sin(angle) * radius);
+      dummy.rotation.set(angle + segment * 0.13, segment * 0.71 + stoneIndex, stoneIndex * 0.37);
+      const variation = 0.88 + ((segment * 17 + stoneIndex * 31) % 9) * 0.08;
+      dummy.scale.set(1.3 * variation, 1.05 * variation, 1.55 * variation);
+      dummy.updateMatrix();
+      tunnelRocks.setMatrixAt(tunnelRockIndex++, dummy.matrix);
+    }
+  }
+  tunnelRocks.instanceMatrix.needsUpdate = true;
+  group.add(tunnelRocks);
 
   const caveAccentLights = [];
-  [-1, 1].forEach((side) => {
-    const light = new THREE.PointLight(side < 0 ? 0xff5c35 : 0xff9a60, 1.45, 13, 2);
-    light.position.set(0, 2.8, side * (CAVE_TUNNEL_LENGTH / 2 - 0.6));
-    group.add(light);
+  const crystalMaterials = [];
+  const crystalGeometry = new THREE.OctahedronGeometry(0.48, 0);
+  const crystalDummy = new THREE.Object3D();
+  const crystalCount = isTouchDevice ? 44 : 70;
+  const tunnelCrystals = new THREE.InstancedMesh(
+    crystalGeometry,
+    new THREE.MeshStandardMaterial({ color: 0x35cfff, emissive: 0x119dc2, emissiveIntensity: 2.1, roughness: 0.28, toneMapped: false }),
+    crystalCount
+  );
+  crystalMaterials.push(tunnelCrystals.material);
+  for (let index = 0; index < crystalCount; index++) {
+    const ratio = 0.03 + (index / crystalCount) * 0.93;
+    const point = CAVE_ROUTE_CURVE.getPointAt(ratio);
+    const tangent = CAVE_ROUTE_CURVE.getTangentAt(ratio).normalize();
+    const routeRight = new THREE.Vector3().crossVectors(tangent, UP).normalize();
+    const side = index % 2 ? 1 : -1;
+    crystalDummy.position.copy(point).addScaledVector(routeRight, side * (CAVE_INNER_RADIUS - 1.05)).addScaledVector(UP, 1.05 + (index % 4) * 0.36);
+    crystalDummy.rotation.set(index * 1.31, index * 2.17, side * 0.4);
+    const scale = 0.65 + (index % 5) * 0.13;
+    crystalDummy.scale.set(scale * 0.62, scale * 1.8, scale * 0.62);
+    crystalDummy.updateMatrix();
+    tunnelCrystals.setMatrixAt(index, crystalDummy.matrix);
+    if (index % 12 === 3) {
+      const light = new THREE.PointLight(index % 24 === 3 ? 0x4be1ff : 0xc87aff, 9, 31, 1.6);
+      light.position.copy(crystalDummy.position).addScaledVector(UP, 1.2);
+      group.add(light);
+      caveAccentLights.push(light);
+    }
+  }
+  tunnelCrystals.instanceMatrix.needsUpdate = true;
+  group.add(tunnelCrystals);
+
+  const chamber = new THREE.Group();
+  chamber.name = 'The Vastwater · underground river world';
+  group.add(chamber);
+  const chamberFloor = new THREE.Mesh(
+    new THREE.CircleGeometry(1, isTouchDevice ? 48 : 72),
+    new THREE.MeshStandardMaterial({ color: 0x191923, emissive: 0x080d17, emissiveIntensity: 0.4, roughness: 0.98, metalness: 0.03, side: THREE.DoubleSide })
+  );
+  chamberFloor.rotation.x = -Math.PI / 2;
+  chamberFloor.scale.set(CAVE_CHAMBER_RADIUS_X, CAVE_CHAMBER_RADIUS_Z, 1);
+  chamberFloor.position.copy(CAVE_CHAMBER_CENTER).add(new THREE.Vector3(0, 0.05, 0));
+  chamber.add(chamberFloor);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(1, isTouchDevice ? 32 : 48, isTouchDevice ? 16 : 24, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0x0b0910, roughness: 1, side: THREE.BackSide })
+  );
+  dome.scale.set(CAVE_CHAMBER_RADIUS_X + 3, 41, CAVE_CHAMBER_RADIUS_Z + 3);
+  dome.position.copy(CAVE_CHAMBER_CENTER).add(new THREE.Vector3(0, 0.2, 0));
+  chamber.add(dome);
+
+  const cavernSkyLight = new THREE.HemisphereLight(0x5e91ad, 0x160b12, 1.15);
+  chamber.add(cavernSkyLight);
+  const cavernKeyLight = new THREE.DirectionalLight(0x8bc7d8, 1.15);
+  cavernKeyLight.position.set(-34, -10, -160);
+  cavernKeyLight.target.position.copy(CAVE_CHAMBER_CENTER);
+  chamber.add(cavernKeyLight, cavernKeyLight.target);
+  [
+    { color: 0x42bddd, position: [-34, -27, -178] },
+    { color: 0x9a55e8, position: [3, -19, -226] },
+    { color: 0xffa84d, position: [34, -28, -218] },
+  ].forEach((fill) => {
+    const light = new THREE.PointLight(fill.color, 34, 125, 1.35);
+    light.position.set(...fill.position);
+    chamber.add(light);
     caveAccentLights.push(light);
   });
 
-  const stalactiteMaterial = new THREE.MeshStandardMaterial({ color: 0x1b0c09, roughness: 1, flatShading: true });
-  for (let i = 0; i < 15; i++) {
-    const height = 0.75 + ((i * 47) % 9) * 0.16;
-    const stalactite = new THREE.Mesh(new THREE.ConeGeometry(0.25 + (i % 4) * 0.08, height, 7), stalactiteMaterial);
-    stalactite.position.set(Math.sin(i * 2.83) * 3.8, CAVE_INNER_RADIUS - height * 0.42, -12.5 + (i / 14) * 25);
-    stalactite.rotation.z = Math.PI;
-    group.add(stalactite);
+  const chamberRockCount = isTouchDevice ? 100 : 160;
+  const chamberRocks = new THREE.InstancedMesh(rockGeometry, new THREE.MeshStandardMaterial({ color: 0x292128, roughness: 1, flatShading: true }), chamberRockCount);
+  for (let index = 0; index < chamberRockCount; index++) {
+    const angle = (index / chamberRockCount) * Math.PI * 2;
+    const wallBand = index % 3 !== 0;
+    const radiusX = wallBand ? CAVE_CHAMBER_RADIUS_X - 1.5 : 12 + (index % 11) * 3.2;
+    const radiusZ = wallBand ? CAVE_CHAMBER_RADIUS_Z - 1.5 : 16 + (index % 13) * 3.7;
+    dummy.position.set(
+      CAVE_CHAMBER_CENTER.x + Math.sin(angle * 1.03) * radiusX,
+      wallBand ? CAVE_CHAMBER_CENTER.y + 1.2 + (index % 7) * 3.1 : CAVE_CHAMBER_CENTER.y + 29 + Math.sin(index * 3.1) * 6,
+      CAVE_CHAMBER_CENTER.z + Math.cos(angle) * radiusZ
+    );
+    dummy.rotation.set(index * 0.37, angle, index * 0.91);
+    const scale = wallBand ? 2.8 + (index % 6) * 0.8 : 1.4 + (index % 5) * 0.75;
+    dummy.scale.set(scale * 1.25, scale, scale * 1.5);
+    dummy.updateMatrix();
+    chamberRocks.setMatrixAt(index, dummy.matrix);
   }
+  chamberRocks.instanceMatrix.needsUpdate = true;
+  chamber.add(chamberRocks);
 
-  for (let z = -13.5; z <= 13.5; z += 3.4) {
-    const centerNormal = stepWorldNormal(hub.normal, hub.heading, -z, PLANET_RADIUS);
-    const localRight = hub.right.clone().addScaledVector(centerNormal, -hub.right.dot(centerNormal)).normalize();
-    [-1, 1].forEach((side) => {
-      const wallNormal = stepWorldNormal(centerNormal, localRight, side * (CAVE_INNER_RADIUS + 0.3), PLANET_RADIUS);
-      obstacles.push({ normal: wallNormal, radius: 1.32 });
-    });
+  const riverCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-44, -46.78, -154),
+    new THREE.Vector3(-24, -46.75, -177),
+    new THREE.Vector3(-9, -46.72, -202),
+    new THREE.Vector3(8, -46.74, -227),
+    new THREE.Vector3(31, -46.76, -249),
+    new THREE.Vector3(43, -46.77, -265),
+  ], false, 'centripetal', 0.5);
+  const riverMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `varying vec2 vUv; void main(){vUv=uv; vec3 p=position; p.y += sin(uv.y*18.0)*0.035; gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);}`,
+    fragmentShader: `uniform float uTime; varying vec2 vUv; void main(){float ripple=sin(vUv.y*54.0-uTime*4.2)+sin(vUv.y*23.0+vUv.x*11.0-uTime*2.1); vec3 deep=vec3(.015,.16,.23); vec3 glow=vec3(.12,.72,.82); float edge=pow(abs(vUv.x-.5)*2.0,2.0); gl_FragColor=vec4(mix(deep,glow,.32+ripple*.08+edge*.18),.88);}`,
+  });
+  const river = new THREE.Mesh(createCaveRibbonGeometry(riverCurve, 8.5, isTouchDevice ? 48 : 72, 0), riverMaterial);
+  chamber.add(river);
+
+  const waterfallMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+    fragmentShader: `uniform float uTime; varying vec2 vUv; void main(){float stream=.6+.4*sin(vUv.x*31.0+sin(vUv.y*13.0)-uTime*3.0); float foam=smoothstep(.7,1.0,sin((vUv.y+uTime*.22)*60.0)*.5+.5); vec3 c=mix(vec3(.02,.22,.3),vec3(.38,.92,1.),stream*.45+foam*.35); gl_FragColor=vec4(c,.42+stream*.22);}`,
+  });
+  const waterfalls = [];
+  [
+    { position: [-42, -31.5, -157], rotation: 0.62, scale: [9, 31] },
+    { position: [41, -28.5, -261], rotation: -2.45, scale: [13, 37] },
+  ].forEach((fall) => {
+    const waterfall = new THREE.Mesh(new THREE.PlaneGeometry(fall.scale[0], fall.scale[1], 1, 16), waterfallMaterial);
+    waterfall.position.set(...fall.position);
+    waterfall.rotation.y = fall.rotation;
+    chamber.add(waterfall);
+    waterfalls.push(waterfall);
+    const light = new THREE.PointLight(0x3ed9ff, 3.1, 38, 2);
+    light.position.copy(waterfall.position).add(new THREE.Vector3(0, -8, 3));
+    chamber.add(light);
+    caveAccentLights.push(light);
+  });
+
+  const mistCount = isTouchDevice ? 65 : 120;
+  const mistPositions = new Float32Array(mistCount * 3);
+  const mistSeeds = [];
+  for (let index = 0; index < mistCount; index++) {
+    const fallIndex = index % 2;
+    const origin = fallIndex === 0 ? new THREE.Vector3(-42, -46, -157) : new THREE.Vector3(41, -46, -261);
+    const seed = { origin, phase: (index * 0.618) % 1, radius: 1.5 + (index % 9) * 0.35, speed: 0.18 + (index % 7) * 0.025 };
+    mistSeeds.push(seed);
+    mistPositions[index * 3] = origin.x;
+    mistPositions[index * 3 + 1] = origin.y;
+    mistPositions[index * 3 + 2] = origin.z;
   }
+  const mistGeometry = new THREE.BufferGeometry();
+  mistGeometry.setAttribute('position', new THREE.BufferAttribute(mistPositions, 3));
+  const mist = new THREE.Points(mistGeometry, new THREE.PointsMaterial({ map: dustTexture, color: 0xa9efff, size: 1.25, transparent: true, opacity: 0.22, depthWrite: false }));
+  chamber.add(mist);
 
-  return { group, caveAccentLights };
+  const hive = new THREE.Group();
+  hive.name = 'The Golden Resonance · giant hive';
+  hive.position.set(38, -27, -220);
+  chamber.add(hive);
+  const hiveMaterial = new THREE.MeshStandardMaterial({ color: 0x9e5b12, emissive: 0x6b2e02, emissiveIntensity: 0.55, roughness: 0.82 });
+  [[0, 1, 0, 8], [0, -5, 0, 10], [1, -11, 0, 8], [-1, -16, 0, 6]].forEach(([x, y, z, size]) => {
+    const lobe = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), hiveMaterial);
+    lobe.position.set(x, y, z);
+    lobe.scale.set(size * 0.76, size, size * 0.72);
+    hive.add(lobe);
+  });
+  const hexCount = isTouchDevice ? 55 : 91;
+  const hexes = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.78, 0.78, 0.38, 6), new THREE.MeshStandardMaterial({ color: 0xe0a233, emissive: 0x7a3c08, emissiveIntensity: 0.75, roughness: 0.65 }), hexCount);
+  let hexIndex = 0;
+  for (let row = -6; row <= 6 && hexIndex < hexCount; row++) {
+    for (let column = -4; column <= 4 && hexIndex < hexCount; column++) {
+      if (Math.abs(row) + Math.abs(column) > 9) continue;
+      dummy.position.set(-6.25, -7 + row * 1.17, column * 1.38 + (row & 1 ? 0.68 : 0));
+      dummy.rotation.set(0, 0, Math.PI / 2);
+      dummy.scale.setScalar(0.82 + ((row * row + column * 7 + 19) % 5) * 0.04);
+      dummy.updateMatrix();
+      hexes.setMatrixAt(hexIndex++, dummy.matrix);
+    }
+  }
+  hexes.count = hexIndex;
+  hexes.instanceMatrix.needsUpdate = true;
+  hive.add(hexes);
+  const hiveLight = new THREE.PointLight(0xffa726, 4.2, 44, 2);
+  hiveLight.position.set(-5, -7, 0);
+  hive.add(hiveLight);
+  caveAccentLights.push(hiveLight);
+
+  const beeCount = isTouchDevice ? 45 : 85;
+  const beePositions = new Float32Array(beeCount * 3);
+  const beeSeeds = [];
+  for (let index = 0; index < beeCount; index++) {
+    beeSeeds.push({ angle: index * 2.399, radius: 6 + (index % 13) * 0.58, height: -8 + (index % 17) * 0.8, speed: 0.6 + (index % 9) * 0.07 });
+  }
+  const beeGeometry = new THREE.BufferGeometry();
+  beeGeometry.setAttribute('position', new THREE.BufferAttribute(beePositions, 3));
+  const bees = new THREE.Points(beeGeometry, new THREE.PointsMaterial({ color: 0xffd35a, size: 0.24, transparent: true, opacity: 0.95, toneMapped: false }));
+  hive.add(bees);
+
+  const chamberCrystalCount = isTouchDevice ? 90 : 150;
+  const chamberCrystals = new THREE.InstancedMesh(crystalGeometry, new THREE.MeshStandardMaterial({ color: 0xd899ff, emissive: 0x7a2cc2, emissiveIntensity: 2.4, roughness: 0.22, toneMapped: false }), chamberCrystalCount);
+  crystalMaterials.push(chamberCrystals.material);
+  for (let index = 0; index < chamberCrystalCount; index++) {
+    const angle = index * 2.399;
+    const ring = 16 + (index % 19) * 2.1;
+    crystalDummy.position.set(
+      CAVE_CHAMBER_CENTER.x + Math.sin(angle) * Math.min(ring, CAVE_CHAMBER_RADIUS_X - 5),
+      CAVE_CHAMBER_CENTER.y + 0.5,
+      CAVE_CHAMBER_CENTER.z + Math.cos(angle) * Math.min(ring * 1.22, CAVE_CHAMBER_RADIUS_Z - 6)
+    );
+    crystalDummy.rotation.set(Math.sin(index) * 0.22, angle, Math.cos(index * 1.7) * 0.18);
+    const scale = 0.65 + (index % 8) * 0.14;
+    crystalDummy.scale.set(scale * 0.72, scale * (1.8 + (index % 3) * 0.5), scale * 0.72);
+    crystalDummy.updateMatrix();
+    chamberCrystals.setMatrixAt(index, crystalDummy.matrix);
+  }
+  chamberCrystals.instanceMatrix.needsUpdate = true;
+  chamber.add(chamberCrystals);
+
+  const chamberLabel = makeLabelSprite('THE VASTWATER · UNDERMARS BIOSPHERE', '#9beaff');
+  chamberLabel.position.set(0, -8, -204);
+  chamberLabel.scale.set(12.5, 1.6, 1);
+  chamber.add(chamberLabel);
+
+  const bear = buildSubterraneanBear();
+  bear.root.position.set(-20, CAVE_CHAMBER_CENTER.y + 0.25, -210);
+  bear.root.rotation.y = -0.5;
+  chamber.add(bear.root);
+  const bearLabel = makeLabelSprite('MORROW · AUTONOMOUS CAVE BEAR', '#ffd39b');
+  bearLabel.position.set(0, 8.6, 0);
+  bearLabel.scale.set(6.4, 0.9, 1);
+  bear.root.add(bearLabel);
+  const bearWaypoints = [
+    { name: 'patrol the glowstone bank', position: new THREE.Vector3(-29, CAVE_CHAMBER_CENTER.y + 0.25, -225), pause: 4 },
+    { name: 'fish in the underground river', position: new THREE.Vector3(-12, CAVE_CHAMBER_CENTER.y + 0.25, -201), pause: 7 },
+    { name: 'inspect the golden hive', position: new THREE.Vector3(25, CAVE_CHAMBER_CENTER.y + 0.25, -219), pause: 5 },
+    { name: 'watch the western waterfall', position: new THREE.Vector3(-35, CAVE_CHAMBER_CENTER.y + 0.25, -166), pause: 6 },
+    { name: 'forage among the crystal columns', position: new THREE.Vector3(5, CAVE_CHAMBER_CENTER.y + 0.25, -242), pause: 5 },
+    { name: 'drink from the blue river', position: new THREE.Vector3(15, CAVE_CHAMBER_CENTER.y + 0.25, -232), pause: 7 },
+  ];
+
+  caveAccentLights.forEach((light) => { light.userData.caveBaseIntensity = light.intensity; });
+  return {
+    group, chamber, caveAccentLights, crystalMaterials, riverMaterial, waterfallMaterial, waterfalls,
+    mist, mistSeeds, hive, hiveLight, bees, beeSeeds, bear, bearWaypoints,
+    bearWaypoint: 0, bearPause: 2, bearActivity: 'waking beneath Mars', chamberLabel,
+  };
 }
 
-const caveDeltaNormal = new THREE.Vector3();
+let caveTravelZone = 'surface';
+let caveRouteDistance = 0;
+let caveRouteFacing = 1;
+let caveLateral = 0;
+const caveLocalPosition = CAVE_ROUTE_POINTS[0].clone();
+const caveLocalForward = new THREE.Vector3(0, 0, -1);
+const caveLocalUp = new THREE.Vector3(0, 1, 0);
+const caveWorldForward = new THREE.Vector3();
+const caveWorldUp = new THREE.Vector3();
+const caveWorldRight = new THREE.Vector3();
+const caveChamberHeading = new THREE.Vector3(0, 0, -1);
+const caveSamplePoint = new THREE.Vector3();
+const caveSampleTangent = new THREE.Vector3();
+const caveSampleRight = new THREE.Vector3();
 let caveDarkness = 0;
 let caveWasInside = false;
+let caveChamberDiscovered = false;
+const caveFog = new THREE.FogExp2(0x071014, 0.0075);
 
-function updateCaveAtmosphere(dt, listenerNormal, listenerAltitude = 0) {
-  let targetDarkness = 0;
-  if (listenerNormal) {
-    caveDeltaNormal.copy(listenerNormal).sub(NIGHTFALL_CAVE.normal);
-    const along = Math.abs(caveDeltaNormal.dot(NIGHTFALL_CAVE.heading) * PLANET_RADIUS);
-    const across = Math.abs(caveDeltaNormal.dot(NIGHTFALL_CAVE.right) * PLANET_RADIUS);
-    const tunnelDepth = 1 - THREE.MathUtils.smoothstep(along, CAVE_TUNNEL_LENGTH * 0.25, CAVE_TUNNEL_LENGTH * 0.5);
-    const tunnelWidth = 1 - THREE.MathUtils.smoothstep(across, CAVE_INNER_RADIUS * 0.56, CAVE_INNER_RADIUS * 0.92);
-    const roofInfluence = 1 - THREE.MathUtils.smoothstep(listenerAltitude, 2.5, CAVE_INNER_RADIUS + 2);
-    targetDarkness = tunnelDepth * tunnelWidth * roofInfluence;
+function sampleCaveRoute(distance) {
+  const ratio = THREE.MathUtils.clamp(distance / CAVE_ROUTE_LENGTH, 0, 1);
+  caveSamplePoint.copy(CAVE_ROUTE_CURVE.getPointAt(ratio));
+  caveSampleTangent.copy(CAVE_ROUTE_CURVE.getTangentAt(ratio)).normalize();
+  caveSampleRight.crossVectors(caveSampleTangent, UP).normalize();
+  caveLocalPosition.copy(caveSamplePoint).addScaledVector(caveSampleRight, caveLateral);
+  caveLocalForward.copy(caveSampleTangent).multiplyScalar(caveRouteFacing);
+  caveLocalUp.copy(UP);
+}
+
+function placeCaveRover(dt) {
+  const runtime = hubRuntime.nightfall;
+  caveWorldForward.copy(caveLocalForward).transformDirection(runtime.group.matrixWorld).normalize();
+  caveWorldUp.copy(caveLocalUp).transformDirection(runtime.group.matrixWorld).normalize();
+  caveWorldRight.crossVectors(caveWorldForward, caveWorldUp).normalize();
+  alien.position.copy(caveLocalPosition).addScaledVector(caveLocalUp, jumpHeight);
+  runtime.group.localToWorld(alien.position);
+  orientationMatrix.makeBasis(caveWorldRight, caveWorldUp, caveWorldForward.clone().multiplyScalar(-1));
+  targetRoverQuaternion.setFromRotationMatrix(orientationMatrix);
+  alien.quaternion.slerp(targetRoverQuaternion, 1 - Math.exp(-dt * 12));
+}
+
+function enterNightfallDescent() {
+  caveTravelZone = 'tunnel';
+  caveRouteDistance = 0.5;
+  caveRouteFacing = 1;
+  caveLateral = 0;
+  jumpHeight = 0;
+  verticalVelocity = 0;
+  grounded = true;
+  showBanner(`NIGHTFALL DESCENT · ${Math.round(CAVE_ROUTE_LENGTH)} M DRIVE TO THE UNDERMARS`);
+}
+
+function updateCaveNavigation(dt, steeringInput) {
+  if (caveTravelZone === 'tunnel') {
+    caveRouteDistance += driveSpeed * caveRouteFacing * dt;
+    caveLateral = THREE.MathUtils.clamp(caveLateral + steeringInput * caveRouteFacing * Math.min(4.2, Math.abs(driveSpeed) * 0.52) * dt, -3.65, 3.65);
+    if (caveRouteDistance <= 0) {
+      caveTravelZone = 'surface';
+      playerNormal.copy(stepWorldNormal(NIGHTFALL_CAVE.normal, CAVE_INWARD_HEADING, -2.1, PLANET_RADIUS));
+      playerHeading.copy(CAVE_INWARD_HEADING).multiplyScalar(caveRouteFacing).normalize();
+      jumpHeight = 0;
+      showBanner('NIGHTFALL EXIT · MARTIAN DAYLIGHT RESTORED');
+      return;
+    }
+    if (caveRouteDistance >= CAVE_ROUTE_LENGTH) {
+      caveTravelZone = 'chamber';
+      caveRouteDistance = CAVE_ROUTE_LENGTH;
+      sampleCaveRoute(caveRouteDistance);
+      caveChamberHeading.copy(caveLocalForward).setY(0).normalize();
+      caveLocalPosition.copy(CAVE_ROUTE_POINTS[CAVE_ROUTE_POINTS.length - 1]).addScaledVector(caveChamberHeading, 1.5);
+      if (!caveChamberDiscovered) {
+        caveChamberDiscovered = true;
+        showBanner('THE VASTWATER DISCOVERED · LIFE BENEATH MARS');
+      }
+    } else sampleCaveRoute(caveRouteDistance);
   }
+  if (caveTravelZone === 'chamber') {
+    const reverseSteer = driveSpeed < -0.1 ? -1 : 1;
+    const steerStrength = THREE.MathUtils.clamp(Math.abs(driveSpeed) / 3, 0.18, 1);
+    caveChamberHeading.applyAxisAngle(UP, steeringInput * reverseSteer * turnSpeed * steerStrength * dt).normalize();
+    const candidate = caveLocalPosition.clone().addScaledVector(caveChamberHeading, driveSpeed * dt);
+    const normalizedX = (candidate.x - CAVE_CHAMBER_CENTER.x) / (CAVE_CHAMBER_RADIUS_X - 4);
+    const normalizedZ = (candidate.z - CAVE_CHAMBER_CENTER.z) / (CAVE_CHAMBER_RADIUS_Z - 4);
+    const insideChamber = normalizedX * normalizedX + normalizedZ * normalizedZ < 1;
+    const movingTowardEntrance = caveChamberHeading.z * driveSpeed > 0.15;
+    const atTunnelMouth = movingTowardEntrance && candidate.z > -171 && candidate.z < -155 && Math.abs(candidate.x) < 7.2;
+    if (atTunnelMouth) {
+      caveTravelZone = 'tunnel';
+      caveRouteDistance = CAVE_ROUTE_LENGTH - 0.6;
+      const routeTangent = CAVE_ROUTE_CURVE.getTangentAt(1).setY(0).normalize();
+      caveRouteFacing = caveChamberHeading.dot(routeTangent) >= 0 ? 1 : -1;
+      caveLateral = THREE.MathUtils.clamp(candidate.x, -3.65, 3.65);
+      sampleCaveRoute(caveRouteDistance);
+    } else if (insideChamber) {
+      caveLocalPosition.copy(candidate);
+    } else driveSpeed *= -0.12;
+    caveLocalPosition.y = CAVE_CHAMBER_CENTER.y + 0.22 + Math.sin(caveLocalPosition.x * 0.09) * 0.08;
+    caveLocalForward.copy(caveChamberHeading);
+    caveLocalUp.copy(UP);
+  }
+}
 
+function updateNightfallWorld(dt, time) {
+  const runtime = hubRuntime.nightfall;
+  runtime.riverMaterial.uniforms.uTime.value = time;
+  runtime.waterfallMaterial.uniforms.uTime.value = time;
+  runtime.crystalMaterials.forEach((material, index) => {
+    material.emissiveIntensity = 2.15 + Math.sin(time * 1.55 + index * 1.9) * 0.38;
+  });
+  runtime.caveAccentLights.forEach((light, index) => {
+    const baseIntensity = light.userData.caveBaseIntensity || 3;
+    light.intensity = baseIntensity * (0.9 + Math.sin(time * 2.4 + index * 1.37) * 0.1);
+  });
+  const mistPositions = runtime.mist.geometry.attributes.position;
+  runtime.mistSeeds.forEach((seed, index) => {
+    seed.phase = (seed.phase + dt * seed.speed) % 1;
+    const angle = index * 2.399 + time * 0.22;
+    mistPositions.array[index * 3] = seed.origin.x + Math.cos(angle) * seed.radius * seed.phase;
+    mistPositions.array[index * 3 + 1] = seed.origin.y + seed.phase * 4.5;
+    mistPositions.array[index * 3 + 2] = seed.origin.z + Math.sin(angle) * seed.radius * seed.phase;
+  });
+  mistPositions.needsUpdate = true;
+  const beePositions = runtime.bees.geometry.attributes.position;
+  runtime.beeSeeds.forEach((seed, index) => {
+    const angle = seed.angle + time * seed.speed;
+    beePositions.array[index * 3] = Math.cos(angle) * seed.radius - 3;
+    beePositions.array[index * 3 + 1] = seed.height + Math.sin(time * 2.8 + index) * 1.4;
+    beePositions.array[index * 3 + 2] = Math.sin(angle) * seed.radius;
+  });
+  beePositions.needsUpdate = true;
+  runtime.hiveLight.intensity = 3.8 + Math.sin(time * 1.7) * 0.7;
+
+  const bearRuntime = runtime.bear;
+  const waypoint = runtime.bearWaypoints[runtime.bearWaypoint];
+  const toWaypoint = waypoint.position.clone().sub(bearRuntime.root.position);
+  const distance = toWaypoint.length();
+  if (runtime.bearPause > 0) {
+    runtime.bearPause -= dt;
+    bearRuntime.head.rotation.x = THREE.MathUtils.damp(bearRuntime.head.rotation.x, Math.sin(time * 0.9) * 0.12 - 0.08, 3, dt);
+  } else if (distance > 1.2) {
+    const direction = toWaypoint.normalize();
+    bearRuntime.root.position.addScaledVector(direction, dt * 2.25);
+    bearRuntime.root.rotation.y = THREE.MathUtils.damp(bearRuntime.root.rotation.y, Math.atan2(-direction.x, -direction.z), 4, dt);
+    bearRuntime.legs.forEach((leg, index) => { leg.rotation.x = Math.sin(time * 5.1 + index * Math.PI) * 0.31; });
+    bearRuntime.body.position.y = 3.15 + Math.sin(time * 10.2) * 0.09;
+  } else {
+    runtime.bearWaypoint = (runtime.bearWaypoint + 1 + Math.floor(Math.random() * (runtime.bearWaypoints.length - 1))) % runtime.bearWaypoints.length;
+    runtime.bearPause = waypoint.pause + Math.random() * 4;
+    runtime.bearActivity = waypoint.name;
+    if (caveTravelZone === 'chamber' && distance < 1.2) showBanner(`MORROW IS ${runtime.bearActivity.toUpperCase()}`);
+  }
+  if (caveTravelZone === 'chamber') {
+    const playerDistance = bearRuntime.root.position.distanceTo(caveLocalPosition);
+    if (playerDistance < 12) {
+      const lookDirection = caveLocalPosition.clone().sub(bearRuntime.root.position);
+      bearRuntime.head.rotation.y = THREE.MathUtils.damp(bearRuntime.head.rotation.y, Math.atan2(-lookDirection.x, -lookDirection.z) - bearRuntime.root.rotation.y, 3.5, dt);
+    }
+  }
+  if (caveWaterGain && audioStarted && audioEnabled && audioContext.state === 'running') {
+    const caveWaterLevel = caveTravelZone === 'chamber' ? 0.0085 : caveTravelZone === 'tunnel' ? 0.0012 : 0.0001;
+    caveWaterGain.gain.setTargetAtTime(caveWaterLevel, audioContext.currentTime, caveTravelZone === 'surface' ? 0.5 : 0.8);
+  }
+}
+
+function updateCaveAtmosphere(dt, listenerNormal) {
+  let targetDarkness = caveTravelZone === 'surface' ? 0 : caveTravelZone === 'tunnel'
+    ? THREE.MathUtils.smoothstep(caveRouteDistance, 2, 22)
+    : 0.9;
+  if (caveTravelZone === 'surface' && listenerNormal) {
+    const entranceDistance = geodesicDistance(listenerNormal, NIGHTFALL_CAVE.normal);
+    targetDarkness = (1 - THREE.MathUtils.smoothstep(entranceDistance, 0, 5)) * 0.2;
+  }
   caveDarkness = THREE.MathUtils.damp(caveDarkness, targetDarkness, 5.5, dt);
-  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, 0.38, caveDarkness);
-  hemisphereLight.intensity = THREE.MathUtils.lerp(0.85, 0.035, caveDarkness);
-  sunLight.intensity = THREE.MathUtils.lerp(1.8, 0.045, caveDarkness);
-  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.018, caveDarkness);
-
-  if (targetDarkness > 0.56 && !caveWasInside) {
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, 0.58, caveDarkness);
+  hemisphereLight.intensity = THREE.MathUtils.lerp(hemisphereLight.intensity, 0.018, caveDarkness);
+  sunLight.intensity = THREE.MathUtils.lerp(sunLight.intensity, 0.025, caveDarkness);
+  ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.026, caveDarkness);
+  if (caveDarkness > 0.03) {
+    caveFog.density = THREE.MathUtils.lerp(0.002, 0.0075, caveDarkness);
+    scene.fog = caveFog;
+  } else if (scene.fog === caveFog) scene.fog = null;
+  if (targetDarkness > 0.55 && !caveWasInside) {
     caveWasInside = true;
-    showBanner('ENTERING NIGHTFALL CAVE · LIGHT LEVEL CRITICAL');
-  } else if (targetDarkness < 0.025 && caveWasInside) {
-    caveWasInside = false;
-    showBanner('CAVE EXIT · DAYLIGHT RESTORED');
-  }
+    showBanner('GLOWSTONE ROAD · DESCENT LIGHTS ACTIVE');
+  } else if (targetDarkness < 0.025 && caveWasInside) caveWasInside = false;
 }
 
 const hubRuntime = {};
@@ -5124,6 +5599,8 @@ let thrusterBusGain = null;
 let thrusterNoiseFilter = null;
 let thrusterToneOscillator = null;
 let thrusterSubOscillator = null;
+let caveWaterGain = null;
+let caveWaterFilter = null;
 let audioEnabled = true;
 let audioStarted = false;
 
@@ -5349,6 +5826,16 @@ function buildAudioSystem() {
   thrusterNoiseSource.buffer = createWhiteNoiseBuffer(audioContext);
   thrusterNoiseSource.loop = true;
   thrusterNoiseSource.connect(thrusterNoiseFilter);
+
+  caveWaterGain = audioContext.createGain();
+  caveWaterGain.gain.setValueAtTime(0.0001, now);
+  caveWaterGain.connect(audioMasterGain);
+  caveWaterFilter = audioContext.createBiquadFilter();
+  caveWaterFilter.type = 'lowpass';
+  caveWaterFilter.frequency.setValueAtTime(680, now);
+  caveWaterFilter.Q.setValueAtTime(0.55, now);
+  caveWaterFilter.connect(caveWaterGain);
+  thrusterNoiseSource.connect(caveWaterFilter);
 
   thrusterToneOscillator = audioContext.createOscillator();
   const thrusterToneGain = audioContext.createGain();
@@ -6100,6 +6587,10 @@ function attachAlienOnFoot(world, normal, heading) {
 }
 
 function exitRover() {
+  if (caveTravelZone !== 'surface') {
+    showBanner('CAVE ROAD SAFETY · EXIT ROVER ON THE SURFACE');
+    return;
+  }
   if (Math.abs(driveSpeed) > 1.2 || !grounded) {
     showBanner('STOP ROVER TO EXIT');
     return;
@@ -6555,7 +7046,9 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
 
 function updateTravelPrompt() {
   if (travelMode === 'driving') {
-    setInteractionPrompt(Math.abs(driveSpeed) < 1.2 && grounded ? 'E · EXIT G-ROVER' : 'STOP TO EXIT G-ROVER');
+    if (caveTravelZone === 'tunnel') setInteractionPrompt('FOLLOW GLOWSTONE ROAD · REVERSE TO RETURN TO MARS');
+    else if (caveTravelZone === 'chamber') setInteractionPrompt(`MORROW: ${hubRuntime.nightfall.bearActivity.toUpperCase()} · FIND THE LIT TUNNEL TO EXIT`);
+    else setInteractionPrompt(Math.abs(driveSpeed) < 1.2 && grounded ? 'E · EXIT G-ROVER' : 'STOP TO EXIT G-ROVER');
     return;
   }
   if (travelMode === 'boarded') {
@@ -6606,6 +7099,9 @@ function updateTravelPrompt() {
 
 const camLookTarget = alien.position.clone();
 const interiorCameraSide = new THREE.Vector3();
+const caveCameraLocal = new THREE.Vector3();
+const caveCameraTangent = new THREE.Vector3();
+const caveCameraRight = new THREE.Vector3();
 camera.position.copy(alien.position).addScaledVector(playerNormal, 18).addScaledVector(playerHeading, -16);
 camera.up.copy(playerNormal);
 
@@ -6943,7 +7439,8 @@ function animate() {
   updateHyperBikeTravel(dt, t);
 
   if (travelMode === 'driving') {
-    const targetSpeed = throttleInput > 0 ? maxForwardSpeed : throttleInput < 0 ? -maxReverseSpeed : 0;
+    const caveSpeedLimit = caveTravelZone === 'surface' ? maxForwardSpeed : CAVE_TUNNEL_MAX_SPEED;
+    const targetSpeed = throttleInput > 0 ? caveSpeedLimit : throttleInput < 0 ? -Math.min(maxReverseSpeed, caveSpeedLimit * 0.72) : 0;
     const acceleration = throttleInput === 0 ? 3.3 : driveSpeed * throttleInput < 0 ? 11 : 5.8;
     driveSpeed = THREE.MathUtils.damp(driveSpeed, targetSpeed, acceleration, dt);
     if (Math.abs(driveSpeed) < 0.015) driveSpeed = 0;
@@ -6951,23 +7448,32 @@ function animate() {
 
     const steerStrength = THREE.MathUtils.clamp(Math.abs(driveSpeed) / 3.2, 0.2, 1);
     const reverseSteer = driveSpeed < -0.1 ? -1 : 1;
-    playerHeading.applyAxisAngle(playerNormal, steeringInput * reverseSteer * turnSpeed * steerStrength * dt).normalize();
     frontWheelMounts.forEach((mount) => {
       mount.rotation.y = THREE.MathUtils.damp(mount.rotation.y, steeringInput * 0.42, 10, dt);
     });
 
-    forwardVec.copy(playerHeading);
-    rightVec.copy(playerHeading).cross(playerNormal).normalize();
-    const arcDistance = driveSpeed * dt;
-    travelAxis.crossVectors(playerNormal, playerHeading).normalize();
-    const candidateNormal = playerNormal.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
-    const candidateHeading = playerHeading.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
-    const blocked = obstacles.some((obstacle) => geodesicDistance(candidateNormal, obstacle.normal) < obstacle.radius + roverRadius);
-    if (!blocked) {
-      playerNormal.copy(candidateNormal);
-      playerHeading.copy(candidateHeading).addScaledVector(playerNormal, -candidateHeading.dot(playerNormal)).normalize();
+    if (
+      caveTravelZone === 'surface'
+      && driveSpeed > 0.35
+      && playerHeading.dot(CAVE_INWARD_HEADING) > 0.28
+      && geodesicDistance(playerNormal, NIGHTFALL_CAVE.normal) < 4.6
+    ) enterNightfallDescent();
+
+    if (caveTravelZone === 'surface') {
+      playerHeading.applyAxisAngle(playerNormal, steeringInput * reverseSteer * turnSpeed * steerStrength * dt).normalize();
+      forwardVec.copy(playerHeading);
+      rightVec.copy(playerHeading).cross(playerNormal).normalize();
+      const arcDistance = driveSpeed * dt;
+      travelAxis.crossVectors(playerNormal, playerHeading).normalize();
+      const candidateNormal = playerNormal.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
+      const candidateHeading = playerHeading.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
+      const blocked = obstacles.some((obstacle) => geodesicDistance(candidateNormal, obstacle.normal) < obstacle.radius + roverRadius);
+      if (!blocked) {
+        playerNormal.copy(candidateNormal);
+        playerHeading.copy(candidateHeading).addScaledVector(playerNormal, -candidateHeading.dot(playerNormal)).normalize();
+      } else driveSpeed *= -0.08;
     } else {
-      driveSpeed *= -0.08;
+      updateCaveNavigation(dt, steeringInput);
     }
 
     if (jumpQueued && grounded) {
@@ -7004,7 +7510,7 @@ function animate() {
       const liftAcceleration = ROVER_MAX_LIFT_ACCELERATION * liftCommand * groundEffect * roverLiftSpool * pulseEfficiency + fanTurbulence;
       verticalVelocity = Math.min(11.5, verticalVelocity + liftAcceleration * dt);
       roverThrusters.scale.y = (0.3 + roverThrusterPulse * 0.82) * (0.45 + roverLiftSpool * 0.55);
-      if (jumpHeight < 6) spawnWheelDust(dt * 1.8, 8 + roverThrusterPulse * 6);
+      if (jumpHeight < 6 && caveTravelZone === 'surface') spawnWheelDust(dt * 1.8, 8 + roverThrusterPulse * 6);
     }
     updateThrusterAudio(roverLiftSpool > 0.015, true, roverThrusterPulse * roverLiftSpool);
     if (!grounded) {
@@ -7023,10 +7529,10 @@ function animate() {
       roverThrusterFuel = Math.min(ROVER_THRUSTER_FUEL_MAX, roverThrusterFuel + dt * 1.7);
     }
 
-    const frontHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, 1.45));
-    const rearHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, -1.45));
-    const rightHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, 1.25));
-    const leftHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, -1.25));
+    const frontHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, 1.45)) : 0;
+    const rearHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, -1.45)) : 0;
+    const rightHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, 1.25)) : 0;
+    const leftHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, -1.25)) : 0;
     const targetPitch = grounded ? Math.atan2(frontHeight - rearHeight, 2.9) : -verticalVelocity * 0.018 + (roverThrusterActive ? Math.sin(t * 57) * 0.012 : 0);
     const targetRoll = grounded
       ? Math.atan2(rightHeight - leftHeight, 2.5) - steeringInput * driveSpeed * 0.0045
@@ -7041,12 +7547,14 @@ function animate() {
       : 0;
     roverChassis.position.y = THREE.MathUtils.damp(roverChassis.position.y, roadBuzz + fanBuzz, grounded ? 9 : 8, dt);
 
-    rightVec.copy(playerHeading).cross(playerNormal).normalize();
-    backVec.copy(playerHeading).multiplyScalar(-1);
-    orientationMatrix.makeBasis(rightVec, playerNormal, backVec);
-    targetRoverQuaternion.setFromRotationMatrix(orientationMatrix);
-    alien.quaternion.slerp(targetRoverQuaternion, 1 - Math.exp(-dt * 12));
-    alien.position.copy(playerNormal).multiplyScalar(PLANET_RADIUS + getSurfaceHeight(playerNormal) + jumpHeight);
+    if (caveTravelZone === 'surface') {
+      rightVec.copy(playerHeading).cross(playerNormal).normalize();
+      backVec.copy(playerHeading).multiplyScalar(-1);
+      orientationMatrix.makeBasis(rightVec, playerNormal, backVec);
+      targetRoverQuaternion.setFromRotationMatrix(orientationMatrix);
+      alien.quaternion.slerp(targetRoverQuaternion, 1 - Math.exp(-dt * 12));
+      alien.position.copy(playerNormal).multiplyScalar(PLANET_RADIUS + getSurfaceHeight(playerNormal) + jumpHeight);
+    } else placeCaveRover(dt);
 
     roverWheels.forEach((wheel) => {
       wheel.rotation.x -= driveSpeed * dt / 0.79;
@@ -7057,7 +7565,7 @@ function animate() {
     });
     alienDriver.body.scale.y = 1 + Math.sin(t * 1.35) * 0.018;
     alienDriver.alien.rotation.z = Math.sin(t * 0.72) * 0.018 - steeringInput * 0.018;
-    if (grounded && Math.abs(driveSpeed) > 1.4) spawnWheelDust(dt, driveSpeed);
+    if (caveTravelZone === 'surface' && grounded && Math.abs(driveSpeed) > 1.4) spawnWheelDust(dt, driveSpeed);
   } else if (travelMode === 'walking') {
     driveSpeed = THREE.MathUtils.damp(driveSpeed, 0, 8, dt);
     updateRoverAudio(0, 0);
@@ -7078,13 +7586,12 @@ function animate() {
   updateWheelDust(dt);
   updateMoonFootDust(dt);
 
-  const activeMarsNormal = travelMode === 'driving' ? playerNormal : travelMode === 'walking' && currentWorld === 'mars' ? footNormal : null;
-  const activeMarsHeading = travelMode === 'driving' ? playerHeading : travelMode === 'walking' && currentWorld === 'mars' ? footHeading : null;
+  const activeMarsNormal = travelMode === 'driving' && caveTravelZone === 'surface' ? playerNormal : travelMode === 'walking' && currentWorld === 'mars' ? footNormal : null;
+  const activeMarsHeading = travelMode === 'driving' && caveTravelZone === 'surface' ? playerHeading : travelMode === 'walking' && currentWorld === 'mars' ? footHeading : null;
   const activeMarsAltitude = travelMode === 'driving' ? jumpHeight : travelMode === 'walking' && currentWorld === 'mars' ? footJumpHeight : 0;
   const activeMoonNormal = travelMode === 'walking' && currentWorld === 'moon' ? footNormal : null;
   const activeZephyraNormal = travelMode === 'walking' && currentWorld === 'zephyra' ? footNormal : null;
   updateSpeakerStations(t, activeMarsNormal, activeMarsHeading);
-  updateCaveAtmosphere(dt, activeMarsNormal, activeMarsAltitude);
   updateLunarLighting(dt, t);
   updateMarsDustFront(dt, t, activeMarsNormal);
   updateMarsSedimentaryEscarpment(dt, t, activeMarsNormal);
@@ -7099,6 +7606,8 @@ function animate() {
   updateZephyraFluxWell(dt, t, activeZephyraNormal);
   updateZephyraAuroralSquall(dt, t, activeZephyraNormal);
   updateZephyraPiezoelectricGrove(dt, t, activeZephyraNormal);
+  updateNightfallWorld(dt, t);
+  updateCaveAtmosphere(dt, activeMarsNormal, activeMarsAltitude);
 
   if (activeMarsNormal) for (const hub of HUBS) {
     if (!hub.discovered && geodesicDistance(activeMarsNormal, hub.normal) < hub.trigger) {
@@ -7162,10 +7671,6 @@ function animate() {
   }
   sp.needsUpdate = true;
 
-  hubRuntime.nightfall.caveAccentLights.forEach((light, index) => {
-    light.intensity = 1.15 + Math.sin(t * 3.4 + index * 1.7) * 0.22;
-  });
-
   airborneDust.rotation.y += dt * 0.014;
   airborneDust.rotation.z += dt * 0.003;
   updateAeolianSaltation(t);
@@ -7196,15 +7701,32 @@ function animate() {
   let desiredTarget;
   let desiredCameraUp;
   if (travelMode === 'driving') {
-    const cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 15 : 20, lookingAtCamera ? 5.2 : 5.5, caveDarkness);
-    const cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 13 : -18, lookingAtCamera ? 8 : -9.5, caveDarkness);
-    const targetHeight = THREE.MathUtils.lerp(2.2, 1.8, caveDarkness);
-    const targetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 3.2, lookingAtCamera ? 0 : 2.5, caveDarkness);
-    desiredCamPos = alien.position.clone()
-      .addScaledVector(playerNormal, cameraHeight)
-      .addScaledVector(playerHeading, cameraTrail);
-    desiredTarget = alien.position.clone().addScaledVector(playerNormal, targetHeight).addScaledVector(playerHeading, targetLead);
-    desiredCameraUp = playerNormal;
+    if (caveTravelZone === 'tunnel') {
+      const cameraOffset = lookingAtCamera ? -5.5 : 8.2;
+      const cameraDistance = THREE.MathUtils.clamp(caveRouteDistance - caveRouteFacing * cameraOffset, 0, CAVE_ROUTE_LENGTH);
+      const cameraRatio = cameraDistance / CAVE_ROUTE_LENGTH;
+      caveCameraLocal.copy(CAVE_ROUTE_CURVE.getPointAt(cameraRatio));
+      caveCameraTangent.copy(CAVE_ROUTE_CURVE.getTangentAt(cameraRatio)).normalize();
+      caveCameraRight.crossVectors(caveCameraTangent, UP).normalize();
+      caveCameraLocal.addScaledVector(caveCameraRight, caveLateral).addScaledVector(UP, lookingAtCamera ? 3.5 : 4.1);
+      desiredCamPos = caveCameraLocal.clone();
+      hubRuntime.nightfall.group.localToWorld(desiredCamPos);
+      desiredTarget = alien.position.clone().addScaledVector(caveWorldUp, 1.8).addScaledVector(caveWorldForward, lookingAtCamera ? -2.4 : 3.4);
+      desiredCameraUp = caveWorldUp;
+    } else if (caveTravelZone === 'chamber') {
+      const cameraHeight = lookingAtCamera ? 8.2 : 10.8;
+      const cameraTrail = lookingAtCamera ? 10 : -14;
+      desiredCamPos = alien.position.clone().addScaledVector(caveWorldUp, cameraHeight).addScaledVector(caveWorldForward, cameraTrail);
+      if (!lookingAtCamera) desiredCamPos.addScaledVector(caveWorldRight, 3.2);
+      desiredTarget = alien.position.clone().addScaledVector(caveWorldUp, 2.1).addScaledVector(caveWorldForward, 6);
+      desiredCameraUp = caveWorldUp;
+    } else {
+      const cameraHeight = lookingAtCamera ? 15 : 20;
+      const cameraTrail = lookingAtCamera ? 13 : -18;
+      desiredCamPos = alien.position.clone().addScaledVector(playerNormal, cameraHeight).addScaledVector(playerHeading, cameraTrail);
+      desiredTarget = alien.position.clone().addScaledVector(playerNormal, 2.2).addScaledVector(playerHeading, lookingAtCamera ? 0 : 3.2);
+      desiredCameraUp = playerNormal;
+    }
   } else if (travelMode === 'walking') {
     const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
     let cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 8.5 : 10.5, lookingAtCamera ? 4.3 : 4.6, interiorCameraBlend);
@@ -7261,7 +7783,9 @@ function animate() {
       : travelMode === 'hyperbike' ? hyperBikeDisplaySpeed : shuttleDisplaySpeed;
   speedValueEl.textContent = Math.round(displayedSpeed).toString().padStart(2, '0');
   let elevation = 0;
-  if (travelMode === 'driving') elevation = getSurfaceHeight(playerNormal) + jumpHeight;
+  if (travelMode === 'driving') elevation = caveTravelZone === 'surface'
+    ? getSurfaceHeight(playerNormal) + jumpHeight
+    : caveLocalPosition.y + jumpHeight;
   else if (travelMode === 'walking') {
     const surfaceHeight = currentWorld === 'mars'
       ? getSurfaceHeight(footNormal)
@@ -7280,6 +7804,14 @@ function animate() {
     locationLabelEl.textContent = 'ARES–LUNA TRANSIT';
     gravityValueEl.textContent = '0.00 G';
     controlsHintEl.textContent = 'SPACE BUS AUTOPILOT · E trip status';
+  } else if (travelMode === 'driving' && caveTravelZone !== 'surface') {
+    locationLabelEl.textContent = caveTravelZone === 'chamber'
+      ? 'THE VASTWATER · UNDERMARS BIOSPHERE'
+      : `NIGHTFALL DESCENT · ${Math.round(caveRouteDistance)} / ${Math.round(CAVE_ROUTE_LENGTH)} M`;
+    gravityValueEl.textContent = '0.38 G';
+    controlsHintEl.textContent = caveTravelZone === 'chamber'
+      ? 'WASD / ARROWS explore · follow glowstone road out · F look back'
+      : 'W/S descend or reverse · A/D keep between glowstones · F look back';
   } else {
     const locationWorld = travelMode === 'boarded' ? shuttleLocation : travelMode === 'hyperbike' ? hyperBikeLocation : currentWorld;
     locationLabelEl.textContent = locationWorld === 'moon'
