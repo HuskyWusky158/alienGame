@@ -7,8 +7,9 @@ const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouchDevice) document.body.classList.add('touch-device');
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x02030a);
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 800);
+const clearSpaceColor = new THREE.Color(0x02030a);
+scene.background = clearSpaceColor.clone();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1600);
 
 const renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -16,6 +17,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, isTouchDevice ? 1.5 : 2
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('app').appendChild(renderer.domElement);
 
 window.addEventListener('resize', () => {
@@ -26,32 +29,147 @@ window.addEventListener('resize', () => {
 
 /* ---------- tiny Mars coordinate system ---------- */
 
-const PLANET_RADIUS = 68;
+const PLANET_SCALE = 2;
+const PLANET_RADIUS = 105 * PLANET_SCALE;
 const MOON_RADIUS = 18;
-const MOON_CENTER = new THREE.Vector3(54, -48, -285);
+const MOON_CENTER = new THREE.Vector3(54, -48, -285).multiplyScalar(PLANET_SCALE);
 const MOON_PAD_NORMAL = MOON_CENTER.clone().negate().normalize();
+const ZEPHYRA_RADIUS = 25;
+const ZEPHYRA_CENTER = new THREE.Vector3(-232, 76, -318).multiplyScalar(PLANET_SCALE);
+const ZEPHYRA_PAD_NORMAL = MOON_CENTER.clone().sub(ZEPHYRA_CENTER).normalize();
 const UP = new THREE.Vector3(0, 1, 0);
 const START_NORMAL = new THREE.Vector3(0, 1, 0);
 const playerNormal = START_NORMAL.clone();
 const playerHeading = new THREE.Vector3(0, 0, -1);
+const MOON_COLD_TRAP_DIRECTION = UP.clone()
+  .addScaledVector(MOON_PAD_NORMAL, -UP.dot(MOON_PAD_NORMAL))
+  .normalize()
+  .applyAxisAngle(MOON_PAD_NORMAL, -1.32);
+const MOON_COLD_TRAP_NORMAL = stepWorldNormal(MOON_PAD_NORMAL, MOON_COLD_TRAP_DIRECTION, 15.2, MOON_RADIUS);
+const MOON_COLD_TRAP_RADIUS = 4.65;
+const MOON_RAY_CRATER_DIRECTION = UP.clone()
+  .addScaledVector(MOON_PAD_NORMAL, -UP.dot(MOON_PAD_NORMAL))
+  .normalize()
+  .applyAxisAngle(MOON_PAD_NORMAL, -2.68);
+const MOON_RAY_CRATER_NORMAL = stepWorldNormal(MOON_PAD_NORMAL, MOON_RAY_CRATER_DIRECTION, 18.6, MOON_RADIUS);
+const MOON_RAY_CRATER_RADIUS = 4.15;
+const MOON_RAY_CRATER_TANGENT = tangentHeadingForNormal(MOON_RAY_CRATER_NORMAL);
+const MOON_SECONDARY_CRATERS = [
+  { angle: -0.2, distance: 5.9, radius: 0.82, depth: 0.52 },
+  { angle: -0.06, distance: 7.7, radius: 0.64, depth: 0.4 },
+  { angle: 0.12, distance: 9.4, radius: 0.96, depth: 0.58 },
+  { angle: 0.25, distance: 11.3, radius: 0.56, depth: 0.34 },
+  { angle: -0.15, distance: 12.8, radius: 0.72, depth: 0.44 },
+].map((crater) => ({
+  ...crater,
+  normal: stepWorldNormal(
+    MOON_RAY_CRATER_NORMAL,
+    MOON_RAY_CRATER_TANGENT.clone().applyAxisAngle(MOON_RAY_CRATER_NORMAL, crater.angle),
+    crater.distance,
+    MOON_RADIUS
+  ),
+}));
+const MOON_MACRO_HEADING = tangentHeadingForNormal(MOON_PAD_NORMAL);
+const MOON_MACRO_FEATURES = [
+  {
+    kind: 'mare',
+    normal: stepWorldNormal(
+      MOON_PAD_NORMAL,
+      MOON_MACRO_HEADING.clone().applyAxisAngle(MOON_PAD_NORMAL, 2.06),
+      20.5,
+      MOON_RADIUS
+    ),
+    radius: 10.8,
+    depth: 1.18,
+  },
+  {
+    kind: 'mare',
+    normal: stepWorldNormal(
+      MOON_PAD_NORMAL,
+      MOON_MACRO_HEADING.clone().applyAxisAngle(MOON_PAD_NORMAL, -1.86),
+      27.5,
+      MOON_RADIUS
+    ),
+    radius: 8.7,
+    depth: 0.88,
+  },
+  {
+    kind: 'highland',
+    normal: stepWorldNormal(
+      MOON_PAD_NORMAL,
+      MOON_MACRO_HEADING.clone().applyAxisAngle(MOON_PAD_NORMAL, -0.52),
+      27,
+      MOON_RADIUS
+    ),
+    radius: 12.6,
+    amplitude: 1.12,
+  },
+];
+function sampleMoonMacroGeology(normal, target = null) {
+  const landingDistance = Math.acos(THREE.MathUtils.clamp(normal.dot(MOON_PAD_NORMAL), -1, 1)) * MOON_RADIUS;
+  const landingBlend = THREE.MathUtils.smoothstep(landingDistance, 4.8, 9.2);
+  const ruggedMacro = noise3(normal.x * 3.1 + 8, normal.y * 3.1 - 5, normal.z * 3.1 + 13) * 0.42;
+  const blockyRegolith = noise3(normal.x * 11.8 - 4, normal.y * 11.8 + 9, normal.z * 11.8 + 2) * 0.14;
+  let height = (ruggedMacro + blockyRegolith) * landingBlend;
+  let mare = 0;
+  let highland = 0;
+  let margin = 0;
+  let strongestMareDistance = Infinity;
+
+  for (const feature of MOON_MACRO_FEATURES) {
+    const distance = Math.acos(THREE.MathUtils.clamp(normal.dot(feature.normal), -1, 1)) * MOON_RADIUS;
+    const u = distance / feature.radius;
+    if (u >= 1.28) continue;
+    const core = 1 - THREE.MathUtils.smoothstep(u, 0.08, 1);
+    const edge = Math.exp(-Math.pow((u - 0.94) / 0.12, 2));
+    if (feature.kind === 'mare') {
+      const lavaTexture = 0.94 + noise3(normal.x * 8 + 3, normal.y * 8 - 11, normal.z * 8 + 6) * 0.06;
+      height -= feature.depth * Math.pow(core, 1.18) * lavaTexture * landingBlend;
+      height += edge * 0.17 * landingBlend;
+      mare = Math.max(mare, core);
+      margin = Math.max(margin, edge);
+      if (core > 0.01) strongestMareDistance = Math.min(strongestMareDistance, distance);
+    } else {
+      const weathering = 0.88 + noise3(normal.x * 7 - 12, normal.y * 7 + 4, normal.z * 7 + 15) * 0.12;
+      height += feature.amplitude * Math.pow(core, 1.22) * weathering * landingBlend;
+      highland = Math.max(highland, core);
+      margin = Math.max(margin, edge * 0.42);
+    }
+  }
+
+  const ridgeNoise = 1 - Math.abs(noise3(normal.x * 6.4 + 5, normal.y * 6.4 - 7, normal.z * 6.4 + 11));
+  const wrinkle = Math.pow(Math.max(0, ridgeNoise), 9) * mare * 0.5;
+  height += wrinkle * landingBlend;
+
+  if (target) {
+    target.mare = mare;
+    target.highland = highland;
+    target.margin = margin;
+    target.wrinkle = wrinkle;
+    target.mareDistance = strongestMareDistance;
+  }
+  return height;
+}
 
 const HUBS = [
-  { key: 'outpost', name: "Caitlin's Projects", x: 46, z: -46, color: 0x6fb8ff, trigger: 13 },
-  { key: 'cavern', name: 'Contact Info', x: -46, z: -46, color: 0xb266ff, trigger: 13 },
-  { key: 'ruins', name: 'Ancient Ruins', x: 46, z: 46, color: 0xe0a35a, trigger: 13 },
-  { key: 'crash', name: 'Crash Site', x: -46, z: 46, color: 0xff6a4a, trigger: 13 },
+  { key: 'outpost', name: "Caitlin's Projects", x: 144, z: -144, color: 0x6fb8ff, trigger: 13 },
+  { key: 'cavern', name: 'Contact Info', x: -144, z: -144, color: 0xb266ff, trigger: 13 },
+  { key: 'ruins', name: 'Ancient Ruins', x: 144, z: 144, color: 0xe0a35a, trigger: 13 },
+  { key: 'crash', name: 'Crash Site', x: -144, z: 144, color: 0xff6a4a, trigger: 13 },
+  { key: 'nightfall', name: 'Nightfall Cave', x: -52, z: -42, color: 0xd66b48, trigger: 19 },
 ];
 
 const SPEAKER_STATIONS = [
-  { key: 'ion', name: 'ION CHIME', x: -15, z: -24, color: 0x72e6ff, notes: [110, 164.81, 220], wave: 'sine', filter: 720, sweep: 260, lfo: 0.11, delay: 0.44 },
-  { key: 'redshift', name: 'RED SHIFT', x: 27, z: -19, color: 0xff806d, notes: [82.41, 123.47, 185], wave: 'sawtooth', filter: 380, sweep: 130, lfo: 0.07, delay: 0.63 },
-  { key: 'dust', name: 'DUST CHOIR', x: -31, z: 18, color: 0xc28cff, notes: [98, 146.83, 196], wave: 'triangle', filter: 560, sweep: 220, lfo: 0.09, delay: 0.52 },
-  { key: 'bloom', name: 'VOID BLOOM', x: 19, z: 36, color: 0x78ffc1, notes: [73.42, 110, 164.81], wave: 'sine', filter: 840, sweep: 310, lfo: 0.13, delay: 0.36 },
-  { key: 'echo', name: 'ORBITAL ECHO', x: 39, z: 10, color: 0xffd36f, notes: [130.81, 196, 261.63], wave: 'triangle', filter: 1050, sweep: 360, lfo: 0.16, delay: 0.71 },
+  { key: 'ion', name: 'MARS CHILL-HOP', x: -12, z: -10, color: 0x72e6ff },
+  { key: 'redshift', name: 'MARS CHILL-HOP', x: 144, z: -96, color: 0xff806d },
+  { key: 'dust', name: 'MARS CHILL-HOP', x: -156, z: 70, color: 0xc28cff },
+  { key: 'bloom', name: 'MARS CHILL-HOP', x: 48, z: 164, color: 0x78ffc1 },
+  { key: 'echo', name: 'MARS CHILL-HOP', x: 164, z: 56, color: 0xffd36f },
 ];
 
-const MARS_PORT = { x: 6, z: -10, name: 'ARES–LUNA TRANSFER' };
+const MARS_PORT = { x: 12, z: -20, name: 'ARES–LUNA TRANSFER' };
 const SHUTTLE_BOARD_RADIUS = 11;
+const SHUTTLE_STATUS_RADIUS = 16;
 const SHUTTLE_DOCK_DURATION = 10;
 const SHUTTLE_TRAVEL_DURATION = 11.5;
 
@@ -61,6 +179,81 @@ function normalFromSurfaceCoords(x, z) {
   const angle = distance / PLANET_RADIUS;
   const tangent = new THREE.Vector3(x / distance, 0, z / distance);
   return START_NORMAL.clone().multiplyScalar(Math.cos(angle)).add(tangent.multiplyScalar(Math.sin(angle))).normalize();
+}
+
+function sampleMoonColdTrap(normal, target = null) {
+  const distance = Math.acos(THREE.MathUtils.clamp(normal.dot(MOON_COLD_TRAP_NORMAL), -1, 1)) * MOON_RADIUS;
+  const u = distance / MOON_COLD_TRAP_RADIUS;
+  const bowl = u < 1 ? Math.pow(Math.max(0, 1 - u * u), 1.48) : 0;
+  const floor = 1 - THREE.MathUtils.smoothstep(distance, 0.9, 2.2);
+  const rim = Math.exp(-Math.pow((u - 1) / 0.13, 2));
+  const fractured = 0.92 + noise3(normal.x * 24 + 5, normal.y * 24 - 11, normal.z * 24 + 3) * 0.08;
+  const height = -2.45 * bowl * fractured - floor * 0.34 + rim * 0.68;
+  if (target) {
+    target.distance = distance;
+    target.bowl = bowl;
+    target.floor = floor;
+    target.rim = rim;
+  }
+  return height;
+}
+
+function sampleMoonRayedCrater(normal, target = null) {
+  const distance = Math.acos(THREE.MathUtils.clamp(normal.dot(MOON_RAY_CRATER_NORMAL), -1, 1)) * MOON_RADIUS;
+  const u = distance / MOON_RAY_CRATER_RADIUS;
+  const bowl = u < 1 ? Math.pow(Math.max(0, 1 - u * u), 1.34) : 0;
+  const floor = 1 - THREE.MathUtils.smoothstep(distance, 0.72, 1.7);
+  const rim = Math.exp(-Math.pow((u - 1) / 0.135, 2));
+  const centralPeak = Math.exp(-Math.pow(distance / 0.68, 2));
+  const fractured = 0.94 + noise3(normal.x * 31 - 8, normal.y * 31 + 6, normal.z * 31 + 12) * 0.06;
+  const height = -2.12 * bowl * fractured - floor * 0.18 + rim * 0.88 + centralPeak * 1.02;
+
+  let ray = 0;
+  if (distance > MOON_RAY_CRATER_RADIUS * 0.92 && distance < 15.5) {
+    const tangent = normal.clone().addScaledVector(MOON_RAY_CRATER_NORMAL, -normal.dot(MOON_RAY_CRATER_NORMAL));
+    if (tangent.lengthSq() > 0.000001) {
+      tangent.normalize();
+      const rayRight = MOON_RAY_CRATER_TANGENT.clone().cross(MOON_RAY_CRATER_NORMAL).normalize();
+      const angle = Math.atan2(tangent.dot(rayRight), tangent.dot(MOON_RAY_CRATER_TANGENT));
+      const primary = Math.pow(Math.max(0, Math.cos(angle * 7 + 0.42)), 14);
+      const secondary = Math.pow(Math.max(0, Math.cos(angle * 11 - 1.15)), 24) * 0.58;
+      const radialFade = 1 - THREE.MathUtils.smoothstep(distance, MOON_RAY_CRATER_RADIUS * 0.95, 15.5);
+      ray = Math.max(primary, secondary) * radialFade;
+    }
+  }
+  if (target) {
+    target.distance = distance;
+    target.bowl = bowl;
+    target.floor = floor;
+    target.rim = rim;
+    target.centralPeak = centralPeak;
+    target.ray = ray;
+  }
+  return height;
+}
+
+function sampleMoonSecondaryCraters(normal, target = null) {
+  let height = 0;
+  let strongest = 0;
+  for (const crater of MOON_SECONDARY_CRATERS) {
+    const distance = Math.acos(THREE.MathUtils.clamp(normal.dot(crater.normal), -1, 1)) * MOON_RADIUS;
+    const u = distance / crater.radius;
+    if (u < 1) {
+      const bowl = Math.pow(Math.max(0, 1 - u * u), 1.38);
+      height -= crater.depth * bowl;
+      strongest = Math.max(strongest, bowl);
+    }
+    if (u < 1.34) height += crater.depth * 0.3 * Math.exp(-Math.pow((u - 1) / 0.16, 2));
+  }
+  if (target) target.influence = strongest;
+  return height;
+}
+
+function getMoonHeight(normal) {
+  return sampleMoonMacroGeology(normal)
+    + sampleMoonColdTrap(normal)
+    + sampleMoonRayedCrater(normal)
+    + sampleMoonSecondaryCraters(normal);
 }
 
 function geodesicDistance(a, b) {
@@ -77,9 +270,16 @@ function slerpNormals(a, b, t) {
 HUBS.forEach((hub) => {
   hub.normal = normalFromSurfaceCoords(hub.x, hub.z);
 });
+const NIGHTFALL_CAVE = HUBS.find((hub) => hub.key === 'nightfall');
+const CAVE_TUNNEL_LENGTH = 34;
+const CAVE_INNER_RADIUS = 6;
+NIGHTFALL_CAVE.heading = START_NORMAL.clone()
+  .addScaledVector(NIGHTFALL_CAVE.normal, -START_NORMAL.dot(NIGHTFALL_CAVE.normal))
+  .normalize();
+NIGHTFALL_CAVE.right = NIGHTFALL_CAVE.heading.clone().cross(NIGHTFALL_CAVE.normal).normalize();
 SPEAKER_STATIONS.forEach((station) => {
   station.normal = normalFromSurfaceCoords(station.x, station.z);
-  station.hearingRadius = 13.5;
+  station.hearingRadius = 44;
 });
 MARS_PORT.normal = normalFromSurfaceCoords(MARS_PORT.x, MARS_PORT.z);
 
@@ -117,20 +317,332 @@ function fbm3(x, y, z) {
   return value;
 }
 
+const ZEPHYRA_CANYON_DIRECTION = UP.clone()
+  .addScaledVector(ZEPHYRA_PAD_NORMAL, -UP.dot(ZEPHYRA_PAD_NORMAL))
+  .normalize()
+  .applyAxisAngle(ZEPHYRA_PAD_NORMAL, 0.72);
+const ZEPHYRA_CANYON_CONTROL_NORMALS = [
+  stepWorldNormal(ZEPHYRA_PAD_NORMAL, ZEPHYRA_CANYON_DIRECTION, 7.5, ZEPHYRA_RADIUS),
+  stepWorldNormal(
+    ZEPHYRA_PAD_NORMAL,
+    ZEPHYRA_CANYON_DIRECTION.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, 0.2),
+    15.5,
+    ZEPHYRA_RADIUS
+  ),
+  stepWorldNormal(
+    ZEPHYRA_PAD_NORMAL,
+    ZEPHYRA_CANYON_DIRECTION.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, 0.47),
+    24,
+    ZEPHYRA_RADIUS
+  ),
+];
+const ZEPHYRA_CANYON_SAMPLES = [];
+for (let segmentIndex = 0; segmentIndex < ZEPHYRA_CANYON_CONTROL_NORMALS.length - 1; segmentIndex++) {
+  const start = ZEPHYRA_CANYON_CONTROL_NORMALS[segmentIndex];
+  const end = ZEPHYRA_CANYON_CONTROL_NORMALS[segmentIndex + 1];
+  for (let sampleIndex = 0; sampleIndex < 13; sampleIndex++) {
+    if (segmentIndex > 0 && sampleIndex === 0) continue;
+    ZEPHYRA_CANYON_SAMPLES.push(slerpNormals(start, end, sampleIndex / 12));
+  }
+}
+const ZEPHYRA_CANYON_NORMAL = ZEPHYRA_CANYON_CONTROL_NORMALS[1];
+
+function sampleZephyraIonCanyon(normal, target = null) {
+  let closestDot = -1;
+  for (const sample of ZEPHYRA_CANYON_SAMPLES) closestDot = Math.max(closestDot, normal.dot(sample));
+  const distance = Math.acos(THREE.MathUtils.clamp(closestDot, -1, 1)) * ZEPHYRA_RADIUS;
+  const trench = 1 - THREE.MathUtils.smoothstep(distance, 0.38, 2.15);
+  const wall = Math.exp(-Math.pow((distance - 2.35) / 0.68, 2));
+  const fracturedDepth = 0.9 + noise3(normal.x * 21 + 7, normal.y * 21 - 3, normal.z * 21 + 13) * 0.1;
+  const height = -3.05 * Math.pow(trench, 1.22) * fracturedDepth + wall * 0.62;
+  if (target) {
+    target.trench = trench;
+    target.wall = wall;
+    target.distance = distance;
+  }
+  return height;
+}
+
+function getZephyraHeight(normal) {
+  const continental = fbm3(normal.x * 2.4 - 11, normal.y * 2.4 + 6, normal.z * 2.4 + 19) * 1.65;
+  const crystalRidges = 1 - Math.abs(noise3(normal.x * 5.8 + 4, normal.y * 5.8 - 12, normal.z * 5.8 + 7));
+  const weathering = fbm3(normal.x * 11 + 3, normal.y * 11 + 8, normal.z * 11 - 5) * 0.24;
+  return continental + Math.pow(crystalRidges, 7) * 1.1 + weathering + sampleZephyraIonCanyon(normal);
+}
+
 const CRATERS = [
-  { normal: normalFromSurfaceCoords(10, -17), radius: 0.19, depth: 2.8, rim: 1.25 },
-  { normal: normalFromSurfaceCoords(-17, 8), radius: 0.24, depth: 3.4, rim: 1.5 },
-  { normal: normalFromSurfaceCoords(8, 17), radius: 0.12, depth: 1.9, rim: 0.8 },
+  { normal: normalFromSurfaceCoords(20, -34), radius: 0.19, depth: 2.8, rim: 1.25 },
+  { normal: normalFromSurfaceCoords(-34, 16), radius: 0.24, depth: 3.4, rim: 1.5 },
+  { normal: normalFromSurfaceCoords(16, 34), radius: 0.12, depth: 1.9, rim: 0.8 },
   { normal: new THREE.Vector3(0.72, -0.54, 0.43).normalize(), radius: 0.22, depth: 3.2, rim: 1.35 },
   { normal: new THREE.Vector3(-0.58, -0.35, -0.74).normalize(), radius: 0.28, depth: 3.8, rim: 1.6 },
   { normal: new THREE.Vector3(0.2, -0.91, -0.36).normalize(), radius: 0.16, depth: 2.5, rim: 1.0 },
 ];
+
+const MARS_MACRO_LANDFORMS = [
+  { key: 'tharsis', kind: 'highland', normal: normalFromSurfaceCoords(94, -18), radius: 0.38, amplitude: 5.9 },
+  { key: 'hellas', kind: 'basin', normal: normalFromSurfaceCoords(-112, 76), radius: 0.34, amplitude: 7.4, rim: 1.65 },
+  { key: 'elysium', kind: 'shield', normal: normalFromSurfaceCoords(70, 106), radius: 0.3, amplitude: 6.6 },
+  { key: 'arabia', kind: 'highland', normal: normalFromSurfaceCoords(-28, 116), radius: 0.31, amplitude: 3.9 },
+];
+
+const MARS_IMPACT_BASIN_NORMAL = normalFromSurfaceCoords(76, -108);
+const MARS_IMPACT_BASIN_RADIUS = 17.5;
+const MARS_IMPACT_BASIN_TANGENT = new THREE.Vector3(1, 0, 0)
+  .addScaledVector(MARS_IMPACT_BASIN_NORMAL, -MARS_IMPACT_BASIN_NORMAL.x)
+  .normalize();
+const MARS_IMPACT_BASIN_RIGHT = MARS_IMPACT_BASIN_TANGENT.clone().cross(MARS_IMPACT_BASIN_NORMAL).normalize();
+const marsImpactDirection = new THREE.Vector3();
+
+function sampleMarsImpactBasin(normal, target = null) {
+  const distance = geodesicDistance(normal, MARS_IMPACT_BASIN_NORMAL);
+  const u = distance / MARS_IMPACT_BASIN_RADIUS;
+  const bowl = u < 1 ? Math.pow(Math.max(0, 1 - u * u), 1.28) : 0;
+  const fractured = 0.91 + fbm3(normal.x * 19 + 7, normal.y * 19 - 12, normal.z * 19 + 4) * 0.09;
+  const rim = Math.exp(-Math.pow((u - 1) / 0.105, 2));
+  const innerWall = THREE.MathUtils.smoothstep(u, 0.42, 0.7) * (1 - THREE.MathUtils.smoothstep(u, 0.91, 1.03));
+  const terraces = innerWall * (
+    Math.exp(-Math.pow((u - 0.56) / 0.038, 2)) * 0.34
+    + Math.exp(-Math.pow((u - 0.71) / 0.043, 2)) * 0.42
+    + Math.exp(-Math.pow((u - 0.84) / 0.048, 2)) * 0.5
+  );
+  const centralPeak = Math.exp(-Math.pow(distance / 3.15, 2));
+  const meltFloor = 1 - THREE.MathUtils.smoothstep(distance, 2.8, 7.2);
+
+  let ejecta = 0;
+  if (distance > MARS_IMPACT_BASIN_RADIUS * 0.9 && distance < MARS_IMPACT_BASIN_RADIUS * 3.1) {
+    marsImpactDirection.copy(normal)
+      .addScaledVector(MARS_IMPACT_BASIN_NORMAL, -normal.dot(MARS_IMPACT_BASIN_NORMAL));
+    if (marsImpactDirection.lengthSq() > 0.000001) {
+      marsImpactDirection.normalize();
+      const angle = Math.atan2(
+        marsImpactDirection.dot(MARS_IMPACT_BASIN_RIGHT),
+        marsImpactDirection.dot(MARS_IMPACT_BASIN_TANGENT)
+      );
+      const primaryRays = Math.pow(Math.max(0, Math.cos(angle * 7 + 0.36)), 16);
+      const secondaryRays = Math.pow(Math.max(0, Math.cos(angle * 11 - 0.92)), 26) * 0.56;
+      const radialFade = 1 - THREE.MathUtils.smoothstep(
+        distance,
+        MARS_IMPACT_BASIN_RADIUS * 0.92,
+        MARS_IMPACT_BASIN_RADIUS * 3.1
+      );
+      ejecta = Math.max(primaryRays, secondaryRays) * radialFade;
+    }
+  }
+
+  const height = -5.65 * bowl * fractured
+    + rim * 2.35
+    + terraces
+    + centralPeak * 3.45
+    + ejecta * (0.24 + Math.max(0, noise3(normal.x * 33, normal.y * 33, normal.z * 33)) * 0.28);
+  if (target) {
+    target.distance = distance;
+    target.bowl = bowl;
+    target.rim = rim;
+    target.wall = innerWall;
+    target.terraces = terraces;
+    target.centralPeak = centralPeak;
+    target.floor = meltFloor;
+    target.ejecta = ejecta;
+  }
+  return height;
+}
+
+const MARS_ESCARP_CENTER_NORMAL = normalFromSurfaceCoords(-34, 128);
+const MARS_ESCARP_ALONG = new THREE.Vector3(1, 0, 0)
+  .addScaledVector(MARS_ESCARP_CENTER_NORMAL, -MARS_ESCARP_CENTER_NORMAL.x)
+  .normalize();
+const MARS_ESCARP_ACROSS = MARS_ESCARP_ALONG.clone().cross(MARS_ESCARP_CENTER_NORMAL).normalize();
+
+function sampleMarsSedimentaryEscarpment(normal, target = null) {
+  const along = Math.asin(THREE.MathUtils.clamp(normal.dot(MARS_ESCARP_ALONG), -1, 1)) * PLANET_RADIUS;
+  const across = Math.asin(THREE.MathUtils.clamp(normal.dot(MARS_ESCARP_ACROSS), -1, 1)) * PLANET_RADIUS;
+  const alongEnvelope = 1 - THREE.MathUtils.smoothstep(Math.abs(along), 17, 25);
+  const frontRise = THREE.MathUtils.smoothstep(across, -4.1, 3.5);
+  const backSlope = 1 - THREE.MathUtils.smoothstep(across, 16, 28);
+  const shelf = Math.max(0, alongEnvelope * frontRise * backSlope);
+  const beddingSteps = (
+    THREE.MathUtils.smoothstep(across, -1.4, 0.2) * 0.18
+    + THREE.MathUtils.smoothstep(across, 2.2, 3.2) * 0.21
+    + THREE.MathUtils.smoothstep(across, 5.1, 6.4) * 0.17
+  ) * alongEnvelope * backSlope;
+  const erosion = 0.93 + fbm3(normal.x * 18 + 4, normal.y * 18 - 9, normal.z * 18 + 12) * 0.07;
+  const height = (5.45 * shelf + beddingSteps) * erosion;
+  if (target) {
+    target.along = along;
+    target.across = across;
+    target.influence = shelf;
+    target.cliff = Math.exp(-Math.pow((across + 0.3) / 4.4, 2)) * alongEnvelope;
+    target.height = height;
+  }
+  return height;
+}
+
+const MARS_YARDANG_CENTER_NORMAL = normalFromSurfaceCoords(118, 18);
+const MARS_YARDANG_WIND = new THREE.Vector3(Math.cos(0.28), 0, Math.sin(0.28))
+  .addScaledVector(MARS_YARDANG_CENTER_NORMAL, -new THREE.Vector3(Math.cos(0.28), 0, Math.sin(0.28)).dot(MARS_YARDANG_CENTER_NORMAL))
+  .normalize();
+const MARS_YARDANG_ACROSS = MARS_YARDANG_WIND.clone().cross(MARS_YARDANG_CENTER_NORMAL).normalize();
+const MARS_YARDANG_SPACING = 9.4;
+
+function sampleMarsYardangField(normal, target = null) {
+  const along = Math.asin(THREE.MathUtils.clamp(normal.dot(MARS_YARDANG_WIND), -1, 1)) * PLANET_RADIUS;
+  const across = Math.asin(THREE.MathUtils.clamp(normal.dot(MARS_YARDANG_ACROSS), -1, 1)) * PLANET_RADIUS;
+  const ellipse = (along * along) / (31 * 31) + (across * across) / (24 * 24);
+  const envelope = ellipse < 1 ? Math.pow(1 - THREE.MathUtils.smoothstep(ellipse, 0.28, 1), 1.18) : 0;
+  const phase = (across / MARS_YARDANG_SPACING) * Math.PI * 2
+    + Math.sin(along * 0.115) * 0.34
+    + noise3(normal.x * 15 - 2, normal.y * 15 + 7, normal.z * 15 + 11) * 0.18;
+  const ridge = Math.pow(Math.max(0, 0.5 + Math.cos(phase) * 0.5), 3.8) * envelope;
+  const abrasion = 0.86 + fbm3(normal.x * 19 + 8, normal.y * 19 - 5, normal.z * 19 + 3) * 0.14;
+  const height = ridge * 2.25 * abrasion;
+  if (target) {
+    target.along = along;
+    target.across = across;
+    target.influence = envelope;
+    target.ridge = ridge;
+    target.lee = Math.pow(Math.max(0, -Math.sin(phase)), 2.2) * envelope * (1 - Math.min(1, ridge));
+  }
+  return height;
+}
+
+const MARS_RIFT_CONTROL_NORMALS = [
+  normalFromSurfaceCoords(-118, -48),
+  normalFromSurfaceCoords(-101, -63),
+  normalFromSurfaceCoords(-82, -78),
+  normalFromSurfaceCoords(-60, -92),
+];
+const MARS_RIFT_SEGMENTS = MARS_RIFT_CONTROL_NORMALS.slice(0, -1).map((start, index) => {
+  const end = MARS_RIFT_CONTROL_NORMALS[index + 1];
+  return {
+    start,
+    end,
+    greatCircleNormal: start.clone().cross(end).normalize(),
+    length: Math.acos(THREE.MathUtils.clamp(start.dot(end), -1, 1)),
+  };
+});
+const marsRiftProjection = new THREE.Vector3();
+
+const MARS_DUNE_FIELDS = [
+  { key: 'arcadia', x: 46, z: 44, alongRadius: 48, acrossRadius: 32, amplitude: 2.45, wavelength: 15.5, windAngle: -0.48, phase: 0.16 },
+  { key: 'aonia', x: -82, z: 72, alongRadius: 40, acrossRadius: 27, amplitude: 2.05, wavelength: 13.8, windAngle: -0.22, phase: 0.51 },
+  { key: 'noctis', x: 88, z: -70, alongRadius: 44, acrossRadius: 25, amplitude: 1.85, wavelength: 12.6, windAngle: -0.72, phase: 0.78 },
+].map((field) => {
+  const normal = normalFromSurfaceCoords(field.x, field.z);
+  const windWorld = new THREE.Vector3(Math.cos(field.windAngle), 0, Math.sin(field.windAngle));
+  const wind = windWorld.addScaledVector(normal, -windWorld.dot(normal)).normalize();
+  return {
+    ...field,
+    normal,
+    wind,
+    across: wind.clone().cross(normal).normalize(),
+  };
+});
+
+function sampleMarsAeolianDunes(normal, target = null) {
+  let duneHeight = 0;
+  let strongestInfluence = 0;
+  let strongestLee = 0;
+  for (const field of MARS_DUNE_FIELDS) {
+    const along = normal.dot(field.wind) * PLANET_RADIUS;
+    const across = normal.dot(field.across) * PLANET_RADIUS;
+    const ellipse = (along * along) / (field.alongRadius * field.alongRadius)
+      + (across * across) / (field.acrossRadius * field.acrossRadius);
+    if (ellipse >= 1) continue;
+    const envelope = Math.pow(1 - THREE.MathUtils.smoothstep(ellipse, 0.18, 1), 1.18);
+    const bowedCrest = Math.sin(across * 0.105 + field.phase * 8.1) * 1.55
+      + Math.sin(across * 0.29 - field.phase * 3.7) * 0.42;
+    const cycleValue = (along + bowedCrest) / field.wavelength + field.phase;
+    const cycle = cycleValue - Math.floor(cycleValue);
+    const profile = cycle < 0.72
+      ? Math.pow(cycle / 0.72, 1.52)
+      : Math.pow((1 - cycle) / 0.28, 0.58);
+    const brokenCrescent = 0.76 + Math.sin(across * 0.23 + along * 0.035) * 0.16
+      + noise3(normal.x * 19 + 4, normal.y * 19 - 7, normal.z * 19 + 11) * 0.08;
+    duneHeight += field.amplitude * profile * envelope * Math.max(0.5, brokenCrescent);
+    strongestInfluence = Math.max(strongestInfluence, envelope);
+    if (cycle >= 0.72) {
+      const leeFace = Math.sin(((cycle - 0.72) / 0.28) * Math.PI);
+      strongestLee = Math.max(strongestLee, leeFace * envelope);
+    }
+  }
+  if (target) {
+    target.influence = strongestInfluence;
+    target.lee = strongestLee;
+  }
+  return duneHeight;
+}
+
+function marsRiftDistance(normal) {
+  let minimumAngle = Infinity;
+  for (const segment of MARS_RIFT_SEGMENTS) {
+    const planeDistance = normal.dot(segment.greatCircleNormal);
+    marsRiftProjection.copy(normal).addScaledVector(segment.greatCircleNormal, -planeDistance);
+    if (marsRiftProjection.lengthSq() > 0.000001) {
+      marsRiftProjection.normalize();
+      const fromStart = Math.acos(THREE.MathUtils.clamp(segment.start.dot(marsRiftProjection), -1, 1));
+      const toEnd = Math.acos(THREE.MathUtils.clamp(marsRiftProjection.dot(segment.end), -1, 1));
+      if (fromStart + toEnd <= segment.length + 0.0005) {
+        minimumAngle = Math.min(minimumAngle, Math.asin(THREE.MathUtils.clamp(Math.abs(planeDistance), 0, 1)));
+        continue;
+      }
+    }
+    minimumAngle = Math.min(
+      minimumAngle,
+      Math.acos(THREE.MathUtils.clamp(normal.dot(segment.start), -1, 1)),
+      Math.acos(THREE.MathUtils.clamp(normal.dot(segment.end), -1, 1))
+    );
+  }
+  return minimumAngle * PLANET_RADIUS;
+}
+
+function sampleMarsMacroGeology(normal, target) {
+  target.highland = 0;
+  target.basin = 0;
+  target.shield = 0;
+  for (const feature of MARS_MACRO_LANDFORMS) {
+    const angle = Math.acos(THREE.MathUtils.clamp(normal.dot(feature.normal), -1, 1));
+    const influence = 1 - THREE.MathUtils.smoothstep(angle / feature.radius, 0, 1);
+    if (feature.kind === 'basin') target.basin = Math.max(target.basin, influence);
+    else if (feature.kind === 'shield') target.shield = Math.max(target.shield, influence);
+    else target.highland = Math.max(target.highland, influence);
+  }
+  const riftDistance = marsRiftDistance(normal);
+  target.rift = Math.exp(-Math.pow(riftDistance / 5.1, 2));
+  return target;
+}
 
 function baseSurfaceHeight(normal) {
   let height = fbm3(normal.x * 2.15 + 3, normal.y * 2.15 - 7, normal.z * 2.15 + 11) * 2.75;
   height += fbm3(normal.x * 6.2 - 9, normal.y * 6.2 + 4, normal.z * 6.2) * 0.68;
   const ridgeNoise = 1 - Math.abs(noise3(normal.x * 5.1, normal.y * 5.1, normal.z * 5.1));
   height += Math.pow(ridgeNoise, 5) * 1.25;
+
+  for (const feature of MARS_MACRO_LANDFORMS) {
+    const angle = Math.acos(THREE.MathUtils.clamp(normal.dot(feature.normal), -1, 1));
+    const u = angle / feature.radius;
+    if (u >= 1.3) continue;
+    const core = 1 - THREE.MathUtils.smoothstep(u, 0, 1);
+    if (feature.kind === 'highland') {
+      const weathering = 0.86 + fbm3(normal.x * 9 + 17, normal.y * 9 - 4, normal.z * 9 + 8) * 0.18;
+      height += feature.amplitude * core * weathering;
+    } else if (feature.kind === 'basin') {
+      height -= feature.amplitude * Math.pow(core, 1.35);
+      height += feature.rim * Math.exp(-Math.pow((u - 0.92) / 0.13, 2));
+    } else {
+      const apron = Math.exp(-u * u * 2.65);
+      height += feature.amplitude * apron;
+      if (u < 0.18) height -= 2.2 * Math.pow(1 - u / 0.18, 2);
+    }
+  }
+
+  const riftDistance = marsRiftDistance(normal);
+  height -= 4.25 * Math.exp(-Math.pow(riftDistance / 3.7, 2));
+  height += 0.95 * Math.exp(-Math.pow((riftDistance - 6.2) / 2.1, 2));
+  height += sampleMarsImpactBasin(normal);
+  height += sampleMarsAeolianDunes(normal);
+  height += sampleMarsSedimentaryEscarpment(normal);
+  height += sampleMarsYardangField(normal);
   for (const crater of CRATERS) {
     const u = Math.acos(THREE.MathUtils.clamp(normal.dot(crater.normal), -1, 1)) / crater.radius;
     if (u < 1) height -= crater.depth * Math.pow(1 - u * u, 2);
@@ -142,6 +654,11 @@ function baseSurfaceHeight(normal) {
 const FLATTEN_CENTERS = [
   { normal: START_NORMAL, r0: 6, r1: 11 },
   ...HUBS.map((hub) => ({ normal: hub.normal, r0: 8, r1: 13 })),
+  ...[-12, 12].map((distance) => ({
+    normal: stepWorldNormal(NIGHTFALL_CAVE.normal, NIGHTFALL_CAVE.heading, distance, PLANET_RADIUS),
+    r0: 7,
+    r1: 10,
+  })),
   ...SPEAKER_STATIONS.map((station) => ({ normal: station.normal, r0: 2.2, r1: 4.2 })),
   { normal: MARS_PORT.normal, r0: 5, r1: 8 },
 ];
@@ -180,11 +697,13 @@ function placeSurfaceGroup(group, normal, offset = 0) {
 let sunMaterial;
 let distortedSun;
 let distantMoon;
+let moonSurface;
+let earthriseRuntime;
 let shootingStar;
 let shootingStarTrailMaterial;
 let shootingStarGlowMaterial;
-const shootingStarStart = new THREE.Vector3(-48, -11, -203);
-const shootingStarEnd = new THREE.Vector3(48, -34, -184);
+const shootingStarStart = new THREE.Vector3(-48, -11, -203).multiplyScalar(PLANET_SCALE);
+const shootingStarEnd = new THREE.Vector3(48, -34, -184).multiplyScalar(PLANET_SCALE);
 
 function randomUnitVector() {
   const y = Math.random() * 2 - 1;
@@ -197,10 +716,57 @@ function buildDistantMoon() {
   distantMoon = new THREE.Group();
   distantMoon.position.copy(MOON_CENTER);
 
+  const moonGeometry = new THREE.IcosahedronGeometry(MOON_RADIUS, isTouchDevice ? 5 : 6);
+  const moonPositions = moonGeometry.attributes.position;
+  const moonColors = new Float32Array(moonPositions.count * 3);
+  const normal = new THREE.Vector3();
+  const baseRegolith = new THREE.Color(0xbfb5ad);
+  const coldTrapRegolith = new THREE.Color(0x030508);
+  const freshRimRegolith = new THREE.Color(0xd6cfc5);
+  const freshEjecta = new THREE.Color(0xe4ddd2);
+  const impactMelt = new THREE.Color(0x4c494b);
+  const mareBasalt = new THREE.Color(0x69666a);
+  const highlandAnorthosite = new THREE.Color(0xd2ccc2);
+  const basinMarginRegolith = new THREE.Color(0xaaa49f);
+  const wrinkleRidgeBasalt = new THREE.Color(0x535156);
+  const color = new THREE.Color();
+  const macroGeology = { mare: 0, highland: 0, margin: 0, wrinkle: 0, mareDistance: Infinity };
+  const coldTrap = { distance: Infinity, bowl: 0, floor: 0, rim: 0 };
+  const rayedCrater = { distance: Infinity, bowl: 0, floor: 0, rim: 0, centralPeak: 0, ray: 0 };
+  const secondaryCrater = { influence: 0 };
+  for (let index = 0; index < moonPositions.count; index++) {
+    normal.fromBufferAttribute(moonPositions, index).normalize();
+    const height = getMoonHeight(normal);
+    sampleMoonMacroGeology(normal, macroGeology);
+    sampleMoonColdTrap(normal, coldTrap);
+    sampleMoonRayedCrater(normal, rayedCrater);
+    sampleMoonSecondaryCraters(normal, secondaryCrater);
+    moonPositions.setXYZ(
+      index,
+      normal.x * (MOON_RADIUS + height),
+      normal.y * (MOON_RADIUS + height),
+      normal.z * (MOON_RADIUS + height)
+    );
+    color.copy(baseRegolith)
+      .lerp(mareBasalt, macroGeology.mare * 0.62)
+      .lerp(highlandAnorthosite, macroGeology.highland * 0.34)
+      .lerp(basinMarginRegolith, macroGeology.margin * 0.24)
+      .lerp(wrinkleRidgeBasalt, Math.min(0.54, macroGeology.wrinkle * 0.82))
+      .lerp(coldTrapRegolith, Math.min(1, coldTrap.bowl * 1.45 + coldTrap.floor * 0.4))
+      .lerp(freshRimRegolith, coldTrap.rim * 0.48)
+      .lerp(impactMelt, Math.min(0.62, rayedCrater.bowl * 0.42 + rayedCrater.floor * 0.24 + secondaryCrater.influence * 0.28))
+      .lerp(freshEjecta, Math.min(0.72, rayedCrater.rim * 0.62 + rayedCrater.ray * 0.48 + rayedCrater.centralPeak * 0.36));
+    moonColors[index * 3] = color.r;
+    moonColors[index * 3 + 1] = color.g;
+    moonColors[index * 3 + 2] = color.b;
+  }
+  moonGeometry.setAttribute('color', new THREE.BufferAttribute(moonColors, 3));
+  moonGeometry.computeVertexNormals();
   const moon = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(MOON_RADIUS, 5),
+    moonGeometry,
     new THREE.MeshStandardMaterial({
-      color: 0xbfb5ad,
+      color: 0xffffff,
+      vertexColors: true,
       roughness: 1,
       metalness: 0,
       emissive: 0x241f25,
@@ -208,6 +774,7 @@ function buildDistantMoon() {
       flatShading: false,
     })
   );
+  moonSurface = moon;
   distantMoon.add(moon);
 
   const craterMaterial = new THREE.MeshBasicMaterial({ color: 0x625b5d, transparent: true, opacity: 0.62, side: THREE.DoubleSide });
@@ -227,6 +794,241 @@ function buildDistantMoon() {
   scene.add(distantMoon);
 }
 
+const MOON_EARTH_TANGENT = UP.clone()
+  .addScaledVector(MOON_PAD_NORMAL, -UP.dot(MOON_PAD_NORMAL))
+  .normalize()
+  .applyAxisAngle(MOON_PAD_NORMAL, -0.92);
+const MOON_EARTH_VIEW_DIRECTION = MOON_EARTH_TANGENT.clone().applyAxisAngle(MOON_PAD_NORMAL, Math.PI);
+const MOON_EARTH_VIEW_NORMAL = stepWorldNormal(MOON_PAD_NORMAL, MOON_EARTH_VIEW_DIRECTION, 10.2, MOON_RADIUS);
+const MOON_EARTH_VIEW_SIDE = new THREE.Vector3().crossVectors(MOON_PAD_NORMAL, MOON_EARTH_TANGENT);
+const MOON_EARTH_VIEW_HEADING = MOON_EARTH_VIEW_SIDE.clone()
+  .addScaledVector(MOON_EARTH_VIEW_NORMAL, -MOON_EARTH_VIEW_SIDE.dot(MOON_EARTH_VIEW_NORMAL))
+  .normalize();
+const MOON_EARTH_DIRECTION = MOON_EARTH_VIEW_HEADING.clone().multiplyScalar(0.98)
+  .addScaledVector(MOON_EARTH_VIEW_NORMAL, -0.2)
+  .normalize();
+
+function buildEarthTextureSet() {
+  const width = isTouchDevice ? 256 : 512;
+  const height = width / 2;
+  const surfaceCanvas = document.createElement('canvas');
+  const cloudCanvas = document.createElement('canvas');
+  const cityCanvas = document.createElement('canvas');
+  surfaceCanvas.width = cloudCanvas.width = cityCanvas.width = width;
+  surfaceCanvas.height = cloudCanvas.height = cityCanvas.height = height;
+  const surfaceContext = surfaceCanvas.getContext('2d');
+  const cloudContext = cloudCanvas.getContext('2d');
+  const cityContext = cityCanvas.getContext('2d');
+  const surfaceImage = surfaceContext.createImageData(width, height);
+  const cloudImage = cloudContext.createImageData(width, height);
+  const cityImage = cityContext.createImageData(width, height);
+  const oceanDeep = new THREE.Color(0x062c70);
+  const oceanShelf = new THREE.Color(0x1495bd);
+  const landLow = new THREE.Color(0x3f6c3d);
+  const landDry = new THREE.Color(0x9b7749);
+  const mountain = new THREE.Color(0x746b5e);
+  const ice = new THREE.Color(0xf2f6f6);
+  const pixelColor = new THREE.Color();
+  const longitudeDelta = (angle, center) => Math.atan2(Math.sin(angle - center), Math.cos(angle - center));
+
+  for (let y = 0; y < height; y++) {
+    const v = y / Math.max(1, height - 1);
+    const latitude = (0.5 - v) * Math.PI;
+    const cosLatitude = Math.cos(latitude);
+    const polar = THREE.MathUtils.smoothstep(Math.abs(latitude), 1.18, 1.48);
+    for (let x = 0; x < width; x++) {
+      const u = x / Math.max(1, width - 1);
+      const longitude = (u - 0.5) * Math.PI * 2;
+      const nx = cosLatitude * Math.cos(longitude);
+      const ny = Math.sin(latitude);
+      const nz = cosLatitude * Math.sin(longitude);
+      const continentalNoise = fbm3(nx * 1.35 + 3.2, ny * 1.35 - 5.7, nz * 1.35 + 8.4)
+        + noise3(nx * 3.8 - 7, ny * 3.8 + 2, nz * 3.8 + 5) * 0.21;
+      const continentBlob = Math.max(
+        Math.exp(-Math.pow(longitudeDelta(longitude, -1.82) / 0.42, 2) - Math.pow((latitude - 0.55) / 0.48, 2)),
+        Math.exp(-Math.pow(longitudeDelta(longitude, -1.48) / 0.3, 2) - Math.pow((latitude + 0.32) / 0.62, 2)),
+        Math.exp(-Math.pow(longitudeDelta(longitude, 0.1) / 0.42, 2) - Math.pow((latitude + 0.05) / 0.64, 2)),
+        Math.exp(-Math.pow(longitudeDelta(longitude, 0.78) / 1.0, 2) - Math.pow((latitude - 0.56) / 0.42, 2)),
+        Math.exp(-Math.pow(longitudeDelta(longitude, 2.2) / 0.38, 2) - Math.pow((latitude + 0.48) / 0.27, 2))
+      );
+      const elevation = continentBlob + continentalNoise * 0.34 - 0.53;
+      const coast = THREE.MathUtils.smoothstep(elevation, -0.08, 0.075);
+      const aridity = noise3(nx * 5.2 + 11, ny * 5.2 - 3, nz * 5.2 + 6) * 0.5 + 0.5;
+      const relief = THREE.MathUtils.smoothstep(elevation, 0.18, 0.58);
+      pixelColor.copy(oceanDeep).lerp(oceanShelf, coast * 0.82);
+      if (elevation > 0) pixelColor.copy(landLow).lerp(landDry, aridity * 0.72).lerp(mountain, relief * 0.68);
+      pixelColor.lerp(ice, polar * (0.76 + Math.max(0, elevation) * 0.22));
+      const offset = (y * width + x) * 4;
+      surfaceImage.data[offset] = Math.round(pixelColor.r * 255);
+      surfaceImage.data[offset + 1] = Math.round(pixelColor.g * 255);
+      surfaceImage.data[offset + 2] = Math.round(pixelColor.b * 255);
+      surfaceImage.data[offset + 3] = 255;
+
+      const cloudNoise = fbm3(nx * 3.2 - 13, ny * 3.2 + 4, nz * 3.2 + 9)
+        + noise3(nx * 9 + 2, ny * 9 - 12, nz * 9 + 7) * 0.24;
+      const stormBands = Math.sin(latitude * 13 + longitude * 1.8 + cloudNoise * 2.4) * 0.14;
+      const cloudDensity = THREE.MathUtils.smoothstep(cloudNoise + stormBands, 0.02, 0.48) * (1 - polar * 0.28);
+      cloudImage.data[offset] = 242;
+      cloudImage.data[offset + 1] = 249;
+      cloudImage.data[offset + 2] = 255;
+      cloudImage.data[offset + 3] = Math.round(cloudDensity * 235);
+
+      const cityChance = hash3(x * 0.37 + 4, y * 0.41 - 9, Math.floor(continentalNoise * 23));
+      const inhabitedLatitude = 1 - THREE.MathUtils.smoothstep(Math.abs(latitude), 0.85, 1.22);
+      const city = elevation > 0.04 && relief < 0.68 && cityChance > 0.992 && inhabitedLatitude > 0.1;
+      cityImage.data[offset] = city ? 255 : 0;
+      cityImage.data[offset + 1] = city ? 168 : 0;
+      cityImage.data[offset + 2] = city ? 72 : 0;
+      cityImage.data[offset + 3] = 255;
+    }
+  }
+  surfaceContext.putImageData(surfaceImage, 0, 0);
+  cloudContext.putImageData(cloudImage, 0, 0);
+  cityContext.putImageData(cityImage, 0, 0);
+  const surfaceTexture = new THREE.CanvasTexture(surfaceCanvas);
+  const cloudTexture = new THREE.CanvasTexture(cloudCanvas);
+  const cityTexture = new THREE.CanvasTexture(cityCanvas);
+  surfaceTexture.colorSpace = cloudTexture.colorSpace = cityTexture.colorSpace = THREE.SRGBColorSpace;
+  surfaceTexture.anisotropy = cloudTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  return { surfaceTexture, cloudTexture, cityTexture };
+}
+
+function buildDistantEarth() {
+  const group = new THREE.Group();
+  group.name = 'Earthrise · distant Earth from lunar surface';
+  group.position.copy(MOON_CENTER).addScaledVector(MOON_EARTH_DIRECTION, 145);
+  group.visible = false;
+
+  const textures = buildEarthTextureSet();
+  const spinRoot = new THREE.Group();
+  spinRoot.rotation.z = THREE.MathUtils.degToRad(23.4);
+  group.add(spinRoot);
+
+  const surfaceMaterial = new THREE.MeshStandardMaterial({
+    map: textures.surfaceTexture,
+    emissive: 0xffb36a,
+    emissiveMap: textures.cityTexture,
+    emissiveIntensity: 0.86,
+    roughness: 0.82,
+    metalness: 0,
+    transparent: true,
+    opacity: 0,
+  });
+  const surface = new THREE.Mesh(new THREE.SphereGeometry(6.35, isTouchDevice ? 40 : 64, isTouchDevice ? 24 : 40), surfaceMaterial);
+  spinRoot.add(surface);
+
+  const cloudMaterial = new THREE.MeshStandardMaterial({
+    map: textures.cloudTexture,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    roughness: 1,
+  });
+  const clouds = new THREE.Mesh(new THREE.SphereGeometry(6.46, isTouchDevice ? 40 : 64, isTouchDevice ? 24 : 40), cloudMaterial);
+  spinRoot.add(clouds);
+
+  const atmosphereMaterial = new THREE.ShaderMaterial({
+    uniforms: { uOpacity: { value: 0 } },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      varying vec3 vNormal;
+      varying vec3 vView;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vView = normalize(cameraPosition - world.xyz);
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: `
+      uniform float uOpacity;
+      varying vec3 vNormal;
+      varying vec3 vView;
+      void main() {
+        float rim = pow(1.0 - abs(dot(vNormal, vView)), 2.35);
+        gl_FragColor = vec4(0.2, 0.62, 1.0, rim * 0.62 * uOpacity);
+      }
+    `,
+  });
+  const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(6.78, 48, 28), atmosphereMaterial);
+  group.add(atmosphere);
+
+  scene.add(group);
+  return { group, spinRoot, surface, surfaceMaterial, clouds, cloudMaterial, atmosphere, atmosphereMaterial };
+}
+
+function buildZephyra() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · electric storm planet';
+  group.position.copy(ZEPHYRA_CENTER);
+
+  const geometry = new THREE.SphereGeometry(ZEPHYRA_RADIUS, isTouchDevice ? 96 : 160, isTouchDevice ? 64 : 112);
+  const positions = geometry.attributes.position;
+  const colors = new Float32Array(positions.count * 3);
+  const normal = new THREE.Vector3();
+  const lowland = new THREE.Color(0x142c4f);
+  const mineral = new THREE.Color(0x2b8f91);
+  const crystal = new THREE.Color(0x8de4d2);
+  const violet = new THREE.Color(0x60419c);
+  const canyonGlass = new THREE.Color(0x081523);
+  const ionEdge = new THREE.Color(0x52d6d2);
+  const color = new THREE.Color();
+  const canyon = { trench: 0, wall: 0, distance: Infinity };
+  for (let index = 0; index < positions.count; index++) {
+    normal.fromBufferAttribute(positions, index).normalize();
+    const height = getZephyraHeight(normal);
+    const mineralVein = Math.pow(Math.max(0, noise3(normal.x * 18 + 2, normal.y * 18 - 5, normal.z * 18 + 9)), 2.2);
+    sampleZephyraIonCanyon(normal, canyon);
+    positions.setXYZ(index, normal.x * (ZEPHYRA_RADIUS + height), normal.y * (ZEPHYRA_RADIUS + height), normal.z * (ZEPHYRA_RADIUS + height));
+    color.copy(lowland)
+      .lerp(mineral, THREE.MathUtils.smoothstep(height, -1.1, 1.2) * 0.82)
+      .lerp(crystal, Math.max(0, height - 0.7) * 0.18)
+      .lerp(violet, mineralVein * 0.34)
+      .lerp(canyonGlass, canyon.trench * 0.78)
+      .lerp(ionEdge, canyon.wall * 0.34);
+    colors[index * 3] = color.r;
+    colors[index * 3 + 1] = color.g;
+    colors[index * 3 + 2] = color.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  const surface = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.08 })
+  );
+  group.add(surface);
+
+  const atmosphere = new THREE.Mesh(
+    new THREE.SphereGeometry(ZEPHYRA_RADIUS + 1.45, 64, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0x6cebd9,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  group.add(atmosphere);
+
+  const auroraMaterial = new THREE.MeshBasicMaterial({
+    color: 0xa783ff,
+    transparent: true,
+    opacity: 0.24,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const aurora = new THREE.Mesh(new THREE.TorusGeometry(ZEPHYRA_RADIUS + 2.2, 0.18, 8, 96), auroraMaterial);
+  aurora.rotation.set(1.14, 0.38, -0.22);
+  group.add(aurora);
+
+  scene.add(group);
+  return { group, surface, atmosphere, aurora, auroraMaterial };
+}
+
 function buildShootingStar() {
   shootingStar = new THREE.Group();
   const direction = shootingStarEnd.clone().sub(shootingStarStart).normalize();
@@ -240,8 +1042,8 @@ function buildShootingStar() {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
-  const trail = new THREE.Mesh(new THREE.ConeGeometry(1.6, 44, 10, 1, true), shootingStarTrailMaterial);
-  trail.position.y = -22;
+  const trail = new THREE.Mesh(new THREE.ConeGeometry(3.2, 88, 10, 1, true), shootingStarTrailMaterial);
+  trail.position.y = -44;
   shootingStar.add(trail);
 
   shootingStarGlowMaterial = new THREE.MeshBasicMaterial({
@@ -251,9 +1053,9 @@ function buildShootingStar() {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
-  const head = new THREE.Mesh(new THREE.SphereGeometry(1.2, 16, 12), shootingStarGlowMaterial);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(2.4, 16, 12), shootingStarGlowMaterial);
   shootingStar.add(head);
-  const halo = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12), shootingStarGlowMaterial.clone());
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(6.4, 16, 12), shootingStarGlowMaterial.clone());
   halo.material.opacity = 0.2;
   shootingStar.add(halo);
 
@@ -278,27 +1080,27 @@ function buildSpace() {
   const starCount = isTouchDevice ? 900 : 1800;
   const starPositions = new Float32Array(starCount * 3);
   for (let i = 0; i < starCount; i++) {
-    const star = randomUnitVector().multiplyScalar(260 + Math.random() * 130);
+    const star = randomUnitVector().multiplyScalar((260 + Math.random() * 130) * PLANET_SCALE);
     starPositions[i * 3] = star.x;
     starPositions[i * 3 + 1] = star.y;
     starPositions[i * 3 + 2] = star.z;
   }
   const starGeometry = new THREE.BufferGeometry();
   starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
-  scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: 0xf7ecdc, size: 0.65, transparent: true, opacity: 0.92, fog: false })));
+  scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: 0xf7ecdc, size: 1.3, transparent: true, opacity: 0.92, fog: false })));
 
   const nebulaCount = isTouchDevice ? 240 : 520;
   const nebulaPositions = new Float32Array(nebulaCount * 3);
   for (let i = 0; i < nebulaCount; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = 315 + (Math.random() - 0.5) * 45;
+    const radius = (315 + (Math.random() - 0.5) * 45) * PLANET_SCALE;
     nebulaPositions[i * 3] = Math.cos(angle) * radius;
-    nebulaPositions[i * 3 + 1] = (Math.random() - 0.5) * 38 + Math.sin(angle * 2) * 16;
+    nebulaPositions[i * 3 + 1] = ((Math.random() - 0.5) * 38 + Math.sin(angle * 2) * 16) * PLANET_SCALE;
     nebulaPositions[i * 3 + 2] = Math.sin(angle) * radius;
   }
   const nebulaGeometry = new THREE.BufferGeometry();
   nebulaGeometry.setAttribute('position', new THREE.BufferAttribute(nebulaPositions, 3));
-  const nebula = new THREE.Points(nebulaGeometry, new THREE.PointsMaterial({ color: 0x7b6eb5, size: 2.2, transparent: true, opacity: 0.24, depthWrite: false, fog: false }));
+  const nebula = new THREE.Points(nebulaGeometry, new THREE.PointsMaterial({ color: 0x7b6eb5, size: 4.4, transparent: true, opacity: 0.24, depthWrite: false, fog: false }));
   nebula.rotation.z = -0.46;
   scene.add(nebula);
 
@@ -322,26 +1124,69 @@ function buildSpace() {
       }
     `,
   });
-  distortedSun = new THREE.Mesh(new THREE.PlaneGeometry(48, 48), sunMaterial);
-  distortedSun.position.set(135, 85, -235);
+  distortedSun = new THREE.Mesh(new THREE.PlaneGeometry(96, 96), sunMaterial);
+  distortedSun.position.set(270, 170, -470);
   scene.add(distortedSun);
 
   buildDistantMoon();
+  earthriseRuntime = buildDistantEarth();
+  buildZephyra();
   buildShootingStar();
 }
 buildSpace();
 
-scene.add(new THREE.HemisphereLight(0xf2a879, 0x120910, 0.85));
+const hemisphereLight = new THREE.HemisphereLight(0xf2a879, 0x120910, 0.85);
+scene.add(hemisphereLight);
 const sunLight = new THREE.DirectionalLight(0xffc68f, 1.8);
-sunLight.position.set(135, 85, -235);
+sunLight.position.set(270, 170, -470);
 scene.add(sunLight);
-scene.add(new THREE.AmbientLight(0x9b5970, 0.16));
+const ambientLight = new THREE.AmbientLight(0x9b5970, 0.16);
+scene.add(ambientLight);
+
+// The Moon gets its own grazing solar key instead of inheriting Mars' warm,
+// shadowless ambience. The light follows the active lunar area so one compact
+// shadow map can resolve boots, rocks, the shuttle, and habitat silhouettes.
+const moonSolarTangent = new THREE.Vector3(1, 0, 0)
+  .addScaledVector(MOON_PAD_NORMAL, -MOON_PAD_NORMAL.x)
+  .normalize()
+  .applyAxisAngle(MOON_PAD_NORMAL, -0.42);
+const moonSolarDirection = moonSolarTangent.clone()
+  .multiplyScalar(0.965)
+  .addScaledVector(MOON_PAD_NORMAL, 0.26)
+  .normalize();
+const moonSunTarget = new THREE.Object3D();
+moonSunTarget.position.copy(MOON_CENTER).addScaledVector(MOON_PAD_NORMAL, MOON_RADIUS);
+scene.add(moonSunTarget);
+const moonSunLight = new THREE.DirectionalLight(0xfff2da, 0);
+moonSunLight.target = moonSunTarget;
+moonSunLight.castShadow = true;
+moonSunLight.shadow.mapSize.set(isTouchDevice ? 512 : 1536, isTouchDevice ? 512 : 1536);
+moonSunLight.shadow.camera.near = 0.5;
+moonSunLight.shadow.camera.far = 105;
+moonSunLight.shadow.camera.left = -24;
+moonSunLight.shadow.camera.right = 24;
+moonSunLight.shadow.camera.top = 24;
+moonSunLight.shadow.camera.bottom = -24;
+moonSunLight.shadow.bias = -0.00035;
+moonSunLight.shadow.normalBias = 0.055;
+moonSunLight.shadow.radius = isTouchDevice ? 1 : 2;
+scene.add(moonSunLight);
+const moonBounceLight = new THREE.HemisphereLight(0x9eb9d2, 0x05070d, 0);
+scene.add(moonBounceLight);
+const moonEarthLightTarget = new THREE.Object3D();
+moonEarthLightTarget.position.copy(MOON_CENTER).addScaledVector(MOON_PAD_NORMAL, MOON_RADIUS);
+scene.add(moonEarthLightTarget);
+const moonEarthLight = new THREE.DirectionalLight(0x6d9fe0, 0);
+moonEarthLight.position.copy(earthriseRuntime.group.position);
+moonEarthLight.target = moonEarthLightTarget;
+scene.add(moonEarthLight);
+let moonLightingBlend = 0;
 
 /* ---------- spherical Mars mesh ---------- */
 
 function buildPlanet() {
-  const widthSegments = isTouchDevice ? 76 : 128;
-  const heightSegments = isTouchDevice ? 52 : 92;
+  const widthSegments = isTouchDevice ? 128 : 256;
+  const heightSegments = isTouchDevice ? 92 : 184;
   const geometry = new THREE.SphereGeometry(PLANET_RADIUS, widthSegments, heightSegments);
   const positions = geometry.attributes.position;
   const colors = new Float32Array(positions.count * 3);
@@ -349,14 +1194,53 @@ function buildPlanet() {
   const shadow = new THREE.Color(0x5f2419);
   const dust = new THREE.Color(0xb95431);
   const sunlit = new THREE.Color(0xe28a52);
+  const basalt = new THREE.Color(0x43272a);
+  const highlandOchre = new THREE.Color(0xd88852);
+  const oxide = new THREE.Color(0xc64c2c);
+  const duneSand = new THREE.Color(0xd17a45);
+  const duneLee = new THREE.Color(0x6c3021);
+  const sedimentPale = new THREE.Color(0xd49362);
+  const sedimentDark = new THREE.Color(0x713b2e);
+  const yardangOchre = new THREE.Color(0xad5937);
+  const yardangLee = new THREE.Color(0x4e251f);
+  const impactRim = new THREE.Color(0xd89a71);
+  const impactWall = new THREE.Color(0x5a2c26);
+  const impactMelt = new THREE.Color(0x251b20);
+  const impactEjecta = new THREE.Color(0xbf6948);
   const color = new THREE.Color();
+  const geology = { highland: 0, basin: 0, shield: 0, rift: 0 };
+  const aeolian = { influence: 0, lee: 0 };
+  const escarpment = { along: 0, across: 0, influence: 0, cliff: 0, height: 0 };
+  const yardang = { along: 0, across: 0, influence: 0, ridge: 0, lee: 0 };
+  const impact = { distance: 0, bowl: 0, rim: 0, wall: 0, terraces: 0, centralPeak: 0, floor: 0, ejecta: 0 };
   for (let i = 0; i < positions.count; i++) {
     normal.fromBufferAttribute(positions, i).normalize();
     const height = getSurfaceHeight(normal);
     const grain = noise3(normal.x * 62, normal.y * 62, normal.z * 62) * 0.5 + 0.5;
     const altitude = THREE.MathUtils.clamp((height + 4) / 9, 0, 1);
+    const oxideVein = Math.pow(Math.max(0, noise3(normal.x * 14 - 3, normal.y * 14 + 8, normal.z * 14 - 5)), 2.4);
+    const strata = Math.sin(height * 3.4 + noise3(normal.x * 24, normal.y * 24, normal.z * 24) * 1.8) * 0.5 + 0.5;
+    sampleMarsMacroGeology(normal, geology);
+    sampleMarsAeolianDunes(normal, aeolian);
+    sampleMarsSedimentaryEscarpment(normal, escarpment);
+    sampleMarsYardangField(normal, yardang);
+    sampleMarsImpactBasin(normal, impact);
     positions.setXYZ(i, normal.x * (PLANET_RADIUS + height), normal.y * (PLANET_RADIUS + height), normal.z * (PLANET_RADIUS + height));
     color.copy(shadow).lerp(dust, 0.42 + grain * 0.28).lerp(sunlit, altitude * 0.38);
+    color.lerp(basalt, geology.basin * 0.34 + geology.rift * 0.42);
+    color.lerp(highlandOchre, (geology.highland * 0.24 + geology.shield * 0.2) * (0.65 + strata * 0.35));
+    color.lerp(oxide, oxideVein * 0.13);
+    color.lerp(duneSand, aeolian.influence * 0.48);
+    color.lerp(duneLee, aeolian.lee * 0.32);
+    const beddingTone = Math.sin(height * 5.8 + escarpment.along * 0.18) * 0.5 + 0.5;
+    color.lerp(sedimentDark, escarpment.cliff * (0.16 + beddingTone * 0.16));
+    color.lerp(sedimentPale, escarpment.influence * (0.1 + (1 - beddingTone) * 0.12));
+    color.lerp(yardangOchre, yardang.ridge * 0.38);
+    color.lerp(yardangLee, yardang.lee * 0.32);
+    color.lerp(impactWall, impact.wall * 0.52 + impact.bowl * 0.08);
+    color.lerp(impactMelt, impact.floor * 0.62);
+    color.lerp(impactRim, impact.rim * 0.52 + impact.terraces * 0.2);
+    color.lerp(impactEjecta, impact.ejecta * 0.42);
     colors[i * 3] = color.r;
     colors[i * 3 + 1] = color.g;
     colors[i * 3 + 2] = color.b;
@@ -414,9 +1298,230 @@ const airborneDust = new THREE.Points(
 );
 scene.add(airborneDust);
 
+function buildAeolianSaltation() {
+  const count = isTouchDevice ? 210 : 420;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const grains = [];
+  const paleDust = new THREE.Color(0xe7a06f);
+  const ironDust = new THREE.Color(0xb85b38);
+  const grainColor = new THREE.Color();
+  let seed = 0x5a17a7e;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  for (let index = 0; index < count; index++) {
+    const field = MARS_DUNE_FIELDS[Math.floor(random() * MARS_DUNE_FIELDS.length)];
+    const angle = random() * Math.PI * 2;
+    const radius = Math.sqrt(random()) * 0.88;
+    const along = Math.cos(angle) * field.alongRadius * radius;
+    const across = Math.sin(angle) * field.acrossRadius * radius;
+    const alongNormal = stepWorldNormal(field.normal, field.wind, along, PLANET_RADIUS);
+    const normal = stepWorldNormal(alongNormal, field.across, across, PLANET_RADIUS);
+    const wind = field.wind.clone().addScaledVector(normal, -field.wind.dot(normal)).normalize();
+    grains.push({
+      normal,
+      axis: normal.clone().cross(wind).normalize(),
+      surfaceRadius: PLANET_RADIUS + getSurfaceHeight(normal),
+      phase: random(),
+      liftPhase: random() * Math.PI * 2,
+      speed: 1.4 + random() * 3.8,
+      path: 2.2 + random() * 4.8,
+    });
+    grainColor.copy(ironDust).lerp(paleDust, random() * 0.72);
+    colors[index * 3] = grainColor.r;
+    colors[index * 3 + 1] = grainColor.g;
+    colors[index * 3 + 2] = grainColor.b;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const points = new THREE.Points(
+    geometry,
+    new THREE.PointsMaterial({
+      map: dustTexture,
+      vertexColors: true,
+      size: isTouchDevice ? 0.52 : 0.42,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    })
+  );
+  points.name = 'Wind-driven dune saltation';
+  scene.add(points);
+  return { points, grains, positions };
+}
+
+const aeolianSaltation = buildAeolianSaltation();
+const saltationNormal = new THREE.Vector3();
+
+function updateAeolianSaltation(time) {
+  aeolianSaltation.grains.forEach((grain, index) => {
+    const cycle = (grain.phase + time * grain.speed / grain.path) % 1;
+    const travel = (cycle - 0.5) * grain.path;
+    saltationNormal.copy(grain.normal).applyAxisAngle(grain.axis, travel / PLANET_RADIUS).normalize();
+    const ballisticArc = Math.pow(Math.sin(cycle * Math.PI), 2.4);
+    const flutter = Math.sin(time * 8.5 + grain.liftPhase) * 0.08;
+    const radius = grain.surfaceRadius + 0.18 + ballisticArc * 0.78 + flutter;
+    const offset = index * 3;
+    aeolianSaltation.positions[offset] = saltationNormal.x * radius;
+    aeolianSaltation.positions[offset + 1] = saltationNormal.y * radius;
+    aeolianSaltation.positions[offset + 2] = saltationNormal.z * radius;
+  });
+  aeolianSaltation.points.geometry.attributes.position.needsUpdate = true;
+}
+updateAeolianSaltation(0);
+
+const MARS_DUST_FRONT_START = normalFromSurfaceCoords(-92, -34);
+const MARS_DUST_FRONT_END = normalFromSurfaceCoords(98, 46);
+const marsDustFrontNormal = MARS_DUST_FRONT_START.clone();
+const marsDustFrontHeading = new THREE.Vector3();
+const marsDustFog = new THREE.FogExp2(0x9b4b2f, 0);
+const clearSunColor = new THREE.Color(0xffc68f);
+const stormSunColor = new THREE.Color(0xff7b45);
+const clearHemisphereSky = new THREE.Color(0xf2a879);
+const stormHemisphereSky = new THREE.Color(0x9b4a31);
+const clearHemisphereGround = new THREE.Color(0x120910);
+const stormHemisphereGround = new THREE.Color(0x3b1711);
+const stormSkyColor = new THREE.Color(0x5c2118);
+let marsDustStormBlend = 0;
+let marsDustStormWasNear = false;
+
+function buildMarsDustFront() {
+  const group = new THREE.Group();
+  group.name = 'Moving regional Mars dust front';
+  const count = isTouchDevice ? 280 : 520;
+  const positions = new Float32Array(count * 3);
+  const seeds = [];
+  let seed = 0xd057f20;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let index = 0; index < count; index++) {
+    const heightBias = Math.pow(random(), 1.65);
+    seeds.push({
+      x: (random() - 0.5) * 58,
+      y: 0.35 + heightBias * 16,
+      z: (random() - 0.5) * (5 + heightBias * 10),
+      speed: 2.8 + random() * 5.6,
+      phase: random() * Math.PI * 2,
+      swirl: 0.35 + random() * 1.4,
+    });
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const curtainMaterial = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 } },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      varying vec2 vUv;
+      void main() {
+        float sideFade = smoothstep(0.0, 0.13, vUv.x) * smoothstep(0.0, 0.13, 1.0 - vUv.x);
+        float groundFade = smoothstep(0.0, 0.12, vUv.y);
+        float topFade = 1.0 - smoothstep(0.58, 1.0, vUv.y);
+        float broadNoise = sin(vUv.x * 18.0 + uTime * 0.42) * sin(vUv.y * 13.0 - uTime * 0.27);
+        float fineNoise = sin(vUv.x * 47.0 - vUv.y * 29.0 + uTime * 0.63);
+        float density = 0.15 + broadNoise * 0.042 + fineNoise * 0.022;
+        gl_FragColor = vec4(vec3(0.64, 0.25, 0.12), max(0.0, density) * sideFade * groundFade * topFade);
+      }
+    `,
+  });
+  const curtain = new THREE.Mesh(new THREE.PlaneGeometry(70, 30), curtainMaterial);
+  curtain.name = 'Regional dust front leading curtain';
+  curtain.position.set(0, 13.2, 0.8);
+  group.add(curtain);
+  const material = new THREE.PointsMaterial({
+    map: dustTexture,
+    color: 0xc97043,
+    size: isTouchDevice ? 1.45 : 1.18,
+    transparent: true,
+    opacity: 0.24,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+  });
+  const particles = new THREE.Points(geometry, material);
+  particles.frustumCulled = false;
+  group.add(particles);
+  scene.add(group);
+  return { group, curtain, curtainMaterial, particles, material, positions, seeds };
+}
+
+const marsDustFront = buildMarsDustFront();
+
+function updateMarsDustFront(dt, time, activeMarsNormal) {
+  const travelCycle = (time / 82) % 2;
+  const routeProgress = travelCycle <= 1 ? travelCycle : 2 - travelCycle;
+  marsDustFrontNormal.copy(slerpNormals(MARS_DUST_FRONT_START, MARS_DUST_FRONT_END, routeProgress));
+  marsDustFrontHeading.copy(MARS_DUST_FRONT_END)
+    .addScaledVector(marsDustFrontNormal, -MARS_DUST_FRONT_END.dot(marsDustFrontNormal))
+    .normalize();
+  if (travelCycle > 1) marsDustFrontHeading.multiplyScalar(-1);
+  marsDustFront.group.position.copy(surfaceWorldPosition(marsDustFrontNormal, 0.12));
+  marsDustFront.group.quaternion.copy(surfaceVehicleQuaternion(marsDustFrontNormal, marsDustFrontHeading));
+
+  marsDustFront.seeds.forEach((grain, index) => {
+    const x = ((grain.x + time * grain.speed + 29) % 58) - 29;
+    const y = Math.max(0.18, grain.y + Math.sin(time * grain.swirl + grain.phase) * (0.24 + grain.y * 0.035));
+    const z = grain.z + Math.sin(time * (0.7 + grain.swirl * 0.2) + grain.phase) * (0.7 + grain.y * 0.06);
+    const offset = index * 3;
+    marsDustFront.positions[offset] = x;
+    marsDustFront.positions[offset + 1] = y;
+    marsDustFront.positions[offset + 2] = z;
+  });
+  marsDustFront.particles.geometry.attributes.position.needsUpdate = true;
+  marsDustFront.curtainMaterial.uniforms.uTime.value = time;
+  marsDustFront.material.opacity = 0.18 + (Math.sin(time * 0.9) * 0.5 + 0.5) * 0.1;
+
+  let targetBlend = 0;
+  if (activeMarsNormal) {
+    const distance = geodesicDistance(activeMarsNormal, marsDustFrontNormal);
+    targetBlend = 1 - THREE.MathUtils.smoothstep(distance, 12, 56);
+  }
+  marsDustStormBlend = THREE.MathUtils.damp(marsDustStormBlend, targetBlend, 2.6, dt);
+  const atmosphereBlend = activeMarsNormal ? marsDustStormBlend * (1 - caveDarkness) : 0;
+
+  sunLight.color.lerpColors(clearSunColor, stormSunColor, atmosphereBlend);
+  hemisphereLight.color.lerpColors(clearHemisphereSky, stormHemisphereSky, atmosphereBlend);
+  hemisphereLight.groundColor.lerpColors(clearHemisphereGround, stormHemisphereGround, atmosphereBlend);
+  scene.background.copy(clearSpaceColor).lerp(stormSkyColor, atmosphereBlend * 0.88);
+  if (atmosphereBlend > 0.01) {
+    marsDustFog.density = THREE.MathUtils.lerp(0.0015, 0.022, atmosphereBlend);
+    scene.fog = marsDustFog;
+  } else if (scene.fog === marsDustFog) {
+    scene.fog = null;
+  }
+  sunLight.intensity *= THREE.MathUtils.lerp(1, 0.38, atmosphereBlend);
+  hemisphereLight.intensity *= THREE.MathUtils.lerp(1, 0.58, atmosphereBlend);
+  ambientLight.intensity *= THREE.MathUtils.lerp(1, 0.72, atmosphereBlend);
+  renderer.toneMappingExposure *= THREE.MathUtils.lerp(1, 0.78, atmosphereBlend);
+
+  if (targetBlend > 0.46 && !marsDustStormWasNear) {
+    marsDustStormWasNear = true;
+    showBanner('REGIONAL DUST FRONT ARRIVING · VISIBILITY FALLING');
+  } else if (targetBlend < 0.06 && marsDustStormWasNear) {
+    marsDustStormWasNear = false;
+    showBanner('DUST FRONT PASSED · HORIZON CLEARING');
+  }
+}
+
 const dustDevils = [];
 function buildDustDevils() {
-  [{ x: 19, z: -4 }, { x: -18, z: 15 }].forEach((location, devilIndex) => {
+  [{ x: 38, z: -8 }, { x: -36, z: 30 }].forEach((location, devilIndex) => {
     const count = isTouchDevice ? 38 : 66;
     const positions = new Float32Array(count * 3);
     const seeds = [];
@@ -456,6 +1561,7 @@ function buildRocks() {
     const normal = randomUnitVector();
     if (geodesicDistance(normal, START_NORMAL) < 12) continue;
     if (HUBS.some((hub) => geodesicDistance(normal, hub.normal) < 11)) continue;
+    if (geodesicDistance(normal, NIGHTFALL_CAVE.normal) < CAVE_TUNNEL_LENGTH / 2 + 8) continue;
     if (SPEAKER_STATIONS.some((station) => geodesicDistance(normal, station.normal) < 4.2)) continue;
     if (geodesicDistance(normal, MARS_PORT.normal) < 8) continue;
     const scale = 0.28 + Math.pow(Math.random(), 2) * 1.75;
@@ -473,6 +1579,451 @@ function buildRocks() {
   scene.add(mesh);
 }
 buildRocks();
+
+/* ---------- Arabia Terra sedimentary escarpment ---------- */
+
+let marsEscarpmentDiscovered = false;
+let marsEscarpmentProximity = 0;
+
+function buildMarsSedimentaryEscarpment() {
+  const group = new THREE.Group();
+  group.name = 'Mars · Arabia Terra sedimentary escarpment';
+  scene.add(group);
+
+  const layerMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb9653e,
+    roughness: 0.98,
+    metalness: 0,
+    flatShading: true,
+  });
+  const segmentCount = isTouchDevice ? 7 : 10;
+  const layerCount = isTouchDevice ? 4 : 6;
+  const layers = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    layerMaterial,
+    segmentCount * layerCount
+  );
+  layers.name = 'Exposed horizontal sandstone beds';
+  const dummy = new THREE.Object3D();
+  const localAlong = new THREE.Vector3();
+  const localAcross = new THREE.Vector3();
+  const faceHeading = new THREE.Vector3();
+  const layerColor = new THREE.Color();
+  let instance = 0;
+  for (let segment = 0; segment < segmentCount; segment++) {
+    const alongDistance = THREE.MathUtils.lerp(-19.5, 19.5, segment / Math.max(1, segmentCount - 1));
+    const alongNormal = stepWorldNormal(MARS_ESCARP_CENTER_NORMAL, MARS_ESCARP_ALONG, alongDistance, PLANET_RADIUS);
+    localAcross.copy(MARS_ESCARP_ACROSS).addScaledVector(alongNormal, -MARS_ESCARP_ACROSS.dot(alongNormal)).normalize();
+    const faceNormal = stepWorldNormal(alongNormal, localAcross, -2.7, PLANET_RADIUS);
+    localAlong.copy(MARS_ESCARP_ALONG).addScaledVector(faceNormal, -MARS_ESCARP_ALONG.dot(faceNormal)).normalize();
+    faceHeading.copy(faceNormal).cross(localAlong).normalize();
+    for (let layer = 0; layer < layerCount; layer++) {
+      const altitude = 0.58 + layer * (4.75 / Math.max(1, layerCount - 1));
+      dummy.position.copy(surfaceWorldPosition(faceNormal, altitude));
+      dummy.quaternion.copy(surfaceVehicleQuaternion(faceNormal, faceHeading));
+      dummy.scale.set(
+        4.45,
+        0.18 + (layer % 3) * 0.075,
+        0.58 + ((segment + layer) % 3) * 0.11
+      );
+      dummy.updateMatrix();
+      layers.setMatrixAt(instance, dummy.matrix);
+      layerColor.setHSL(
+        0.035 + layer * 0.005,
+        0.52 + (segment % 2) * 0.06,
+        0.29 + layer * 0.044 + ((segment + layer) % 2) * 0.025
+      );
+      layers.setColorAt(instance, layerColor);
+      instance += 1;
+    }
+  }
+  layers.instanceMatrix.needsUpdate = true;
+  if (layers.instanceColor) layers.instanceColor.needsUpdate = true;
+  group.add(layers);
+
+  const talusCount = isTouchDevice ? 34 : 62;
+  const talus = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(1, 0),
+    new THREE.MeshStandardMaterial({ color: 0x6d3528, roughness: 1, flatShading: true }),
+    talusCount
+  );
+  talus.name = 'Angular talus apron';
+  let seed = 0xa7ab1a;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const align = new THREE.Quaternion();
+  const yaw = new THREE.Quaternion();
+  for (let index = 0; index < talusCount; index++) {
+    const alongDistance = (random() - 0.5) * 42;
+    const acrossDistance = -4.2 - Math.pow(random(), 0.72) * 10.8;
+    const alongNormal = stepWorldNormal(MARS_ESCARP_CENTER_NORMAL, MARS_ESCARP_ALONG, alongDistance, PLANET_RADIUS);
+    localAcross.copy(MARS_ESCARP_ACROSS).addScaledVector(alongNormal, -MARS_ESCARP_ACROSS.dot(alongNormal)).normalize();
+    const normal = stepWorldNormal(alongNormal, localAcross, acrossDistance, PLANET_RADIUS);
+    const scale = 0.18 + Math.pow(random(), 2.1) * 1.05;
+    dummy.position.copy(surfaceWorldPosition(normal, scale * 0.24));
+    align.setFromUnitVectors(UP, normal);
+    yaw.setFromAxisAngle(UP, random() * Math.PI * 2);
+    dummy.quaternion.copy(align).multiply(yaw);
+    dummy.scale.set(scale * (0.8 + random() * 0.65), scale * (0.42 + random() * 0.38), scale);
+    dummy.updateMatrix();
+    talus.setMatrixAt(index, dummy.matrix);
+    layerColor.setHSL(0.025 + random() * 0.025, 0.42 + random() * 0.18, 0.2 + random() * 0.16);
+    talus.setColorAt(index, layerColor);
+  }
+  talus.instanceMatrix.needsUpdate = true;
+  if (talus.instanceColor) talus.instanceColor.needsUpdate = true;
+  group.add(talus);
+
+  const capMaterial = new THREE.MeshStandardMaterial({ color: 0x4d2924, roughness: 0.94, flatShading: true });
+  const capstones = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), capMaterial, segmentCount);
+  for (let segment = 0; segment < segmentCount; segment++) {
+    const alongDistance = THREE.MathUtils.lerp(-19.5, 19.5, segment / Math.max(1, segmentCount - 1));
+    const alongNormal = stepWorldNormal(MARS_ESCARP_CENTER_NORMAL, MARS_ESCARP_ALONG, alongDistance, PLANET_RADIUS);
+    localAcross.copy(MARS_ESCARP_ACROSS).addScaledVector(alongNormal, -MARS_ESCARP_ACROSS.dot(alongNormal)).normalize();
+    const capNormal = stepWorldNormal(alongNormal, localAcross, 3.8, PLANET_RADIUS);
+    localAlong.copy(MARS_ESCARP_ALONG).addScaledVector(capNormal, -MARS_ESCARP_ALONG.dot(capNormal)).normalize();
+    faceHeading.copy(capNormal).cross(localAlong).normalize();
+    dummy.position.copy(surfaceWorldPosition(capNormal, 0.16));
+    dummy.quaternion.copy(surfaceVehicleQuaternion(capNormal, faceHeading));
+    dummy.scale.set(4.5, 0.32 + (segment % 2) * 0.12, 1.15);
+    dummy.updateMatrix();
+    capstones.setMatrixAt(segment, dummy.matrix);
+  }
+  capstones.instanceMatrix.needsUpdate = true;
+  group.add(capstones);
+
+  const landmarkLabel = makeLabelSprite('ARABIA TERRACE · EXPOSED STRATA', '#f0a36f');
+  landmarkLabel.position.copy(surfaceWorldPosition(MARS_ESCARP_CENTER_NORMAL, 9.1));
+  landmarkLabel.scale.set(6.3, 1.08, 1);
+  scene.add(landmarkLabel);
+
+  return { group, layers, layerMaterial, talus, capstones, landmarkLabel };
+}
+
+const marsEscarpmentRuntime = buildMarsSedimentaryEscarpment();
+
+function updateMarsSedimentaryEscarpment(dt, time, activeMarsNormal) {
+  let targetProximity = 0;
+  if (activeMarsNormal) {
+    const distance = geodesicDistance(activeMarsNormal, MARS_ESCARP_CENTER_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 8, 25);
+    if (!marsEscarpmentDiscovered && distance < 12.5) {
+      marsEscarpmentDiscovered = true;
+      showBanner('ARABIA TERRACE DISCOVERED · ANCIENT SEDIMENTARY BEDS');
+    }
+  }
+  marsEscarpmentProximity = THREE.MathUtils.damp(marsEscarpmentProximity, targetProximity, 5, dt);
+  marsEscarpmentRuntime.landmarkLabel.material.opacity = 0.46 + Math.sin(time * 0.82) * 0.07 + marsEscarpmentProximity * 0.32;
+}
+
+/* ---------- Medusae Fossae yardang field ---------- */
+
+let marsYardangDiscovered = false;
+let marsYardangProximity = 0;
+
+function buildMarsYardangField() {
+  const group = new THREE.Group();
+  group.name = 'Mars · Medusae Fossae wind-carved yardang field';
+  scene.add(group);
+
+  const ridgeCount = 5;
+  const segmentCount = isTouchDevice ? 5 : 7;
+  const outcropCount = ridgeCount * segmentCount;
+  const outcropGeometry = new THREE.DodecahedronGeometry(1, 0);
+  const outcropPositions = outcropGeometry.attributes.position;
+  for (let index = 0; index < outcropPositions.count; index++) {
+    const x = outcropPositions.getX(index);
+    const y = outcropPositions.getY(index);
+    const z = outcropPositions.getZ(index);
+    const weathering = 0.84 + hash3(x * 7 + 3, y * 9 - 4, z * 8 + 11) * 0.26;
+    outcropPositions.setXYZ(index, x * weathering, y * (0.78 + weathering * 0.18), z * weathering);
+  }
+  outcropPositions.needsUpdate = true;
+  outcropGeometry.computeVertexNormals();
+  const outcropMaterial = new THREE.MeshStandardMaterial({ color: 0x8d432e, roughness: 1, flatShading: true });
+  const outcrops = new THREE.InstancedMesh(outcropGeometry, outcropMaterial, outcropCount);
+  outcrops.name = 'Streamlined indurated yardang crests';
+  const dummy = new THREE.Object3D();
+  const localWind = new THREE.Vector3();
+  const localAcross = new THREE.Vector3();
+  const instanceColor = new THREE.Color();
+  let instance = 0;
+  for (let ridgeIndex = 0; ridgeIndex < ridgeCount; ridgeIndex++) {
+    const acrossDistance = (ridgeIndex - (ridgeCount - 1) * 0.5) * MARS_YARDANG_SPACING;
+    for (let segment = 0; segment < segmentCount; segment++) {
+      const alongDistance = THREE.MathUtils.lerp(-25, 25, segment / Math.max(1, segmentCount - 1))
+        + Math.sin(ridgeIndex * 2.17 + segment * 1.31) * 0.48;
+      const alongNormal = stepWorldNormal(MARS_YARDANG_CENTER_NORMAL, MARS_YARDANG_WIND, alongDistance, PLANET_RADIUS);
+      localAcross.copy(MARS_YARDANG_ACROSS).addScaledVector(alongNormal, -MARS_YARDANG_ACROSS.dot(alongNormal)).normalize();
+      const meander = Math.sin(segment * 1.91 + ridgeIndex * 2.3) * 0.42;
+      const normal = stepWorldNormal(alongNormal, localAcross, acrossDistance + meander, PLANET_RADIUS);
+      localWind.copy(MARS_YARDANG_WIND).addScaledVector(normal, -MARS_YARDANG_WIND.dot(normal)).normalize();
+      localWind.applyAxisAngle(normal, Math.sin(segment * 2.13 + ridgeIndex) * 0.045);
+      const fieldFade = 1 - Math.pow(Math.abs(alongDistance) / 31, 1.8);
+      const height = 0.2 + Math.max(0, fieldFade) * (0.18 + ((ridgeIndex + segment) % 3) * 0.07);
+      dummy.position.copy(surfaceWorldPosition(normal, height * 0.2 + 0.025));
+      dummy.quaternion.copy(surfaceVehicleQuaternion(normal, localWind));
+      dummy.scale.set(
+        0.72 + ((ridgeIndex + segment) % 2) * 0.22,
+        height,
+        2.55 + Math.max(0, fieldFade) * 1.25 + (segment % 2) * 0.28
+      );
+      dummy.updateMatrix();
+      outcrops.setMatrixAt(instance, dummy.matrix);
+      outcrops.setColorAt(instance, instanceColor.setHSL(0.035 + ridgeIndex * 0.006, 0.4, 0.22 + segment * 0.012));
+      instance += 1;
+    }
+  }
+  outcrops.instanceMatrix.needsUpdate = true;
+  if (outcrops.instanceColor) outcrops.instanceColor.needsUpdate = true;
+  group.add(outcrops);
+
+  const dustCount = isTouchDevice ? 34 : 64;
+  const dustMaterial = new THREE.MeshStandardMaterial({
+    color: 0x54271f,
+    roughness: 1,
+    transparent: true,
+    opacity: 0.54,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+  });
+  const leeDust = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 14).rotateX(-Math.PI / 2), dustMaterial, dustCount);
+  leeDust.name = 'Fine dust trapped in yardang lee wakes';
+  let seed = 0x7a2da9;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let index = 0; index < dustCount; index++) {
+    const ridgeIndex = index % ridgeCount;
+    const alongDistance = -23 + random() * 50;
+    const acrossDistance = (ridgeIndex - (ridgeCount - 1) * 0.5) * MARS_YARDANG_SPACING
+      + MARS_YARDANG_SPACING * (0.24 + random() * 0.22);
+    const alongNormal = stepWorldNormal(MARS_YARDANG_CENTER_NORMAL, MARS_YARDANG_WIND, alongDistance, PLANET_RADIUS);
+    localAcross.copy(MARS_YARDANG_ACROSS).addScaledVector(alongNormal, -MARS_YARDANG_ACROSS.dot(alongNormal)).normalize();
+    const normal = stepWorldNormal(alongNormal, localAcross, acrossDistance, PLANET_RADIUS);
+    localWind.copy(MARS_YARDANG_WIND).addScaledVector(normal, -MARS_YARDANG_WIND.dot(normal)).normalize();
+    dummy.position.copy(surfaceWorldPosition(normal, 0.035));
+    dummy.quaternion.copy(surfaceVehicleQuaternion(normal, localWind));
+    dummy.scale.set(0.18 + random() * 0.34, 1, 0.85 + Math.pow(random(), 0.72) * 2.45);
+    dummy.updateMatrix();
+    leeDust.setMatrixAt(index, dummy.matrix);
+    leeDust.setColorAt(index, instanceColor.setHSL(0.025, 0.5 + random() * 0.12, 0.17 + random() * 0.08));
+  }
+  leeDust.instanceMatrix.needsUpdate = true;
+  if (leeDust.instanceColor) leeDust.instanceColor.needsUpdate = true;
+  group.add(leeDust);
+
+  const landmarkLabel = makeLabelSprite('MEDUSAE YARDANGS · WIND SCULPTED', '#df8b59');
+  landmarkLabel.position.copy(surfaceWorldPosition(MARS_YARDANG_CENTER_NORMAL, 7.2));
+  landmarkLabel.scale.set(6.1, 1.05, 1);
+  scene.add(landmarkLabel);
+
+  return { group, outcrops, outcropMaterial, leeDust, dustMaterial, landmarkLabel };
+}
+
+const marsYardangRuntime = buildMarsYardangField();
+
+function updateMarsYardangField(dt, time, activeMarsNormal) {
+  let targetProximity = 0;
+  if (activeMarsNormal) {
+    const distance = geodesicDistance(activeMarsNormal, MARS_YARDANG_CENTER_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 11, 32);
+    if (!marsYardangDiscovered && distance < 15.5) {
+      marsYardangDiscovered = true;
+      showBanner('MEDUSAE YARDANGS DISCOVERED · PREVAILING WIND RECORDED');
+    }
+  }
+  marsYardangProximity = THREE.MathUtils.damp(marsYardangProximity, targetProximity, 5, dt);
+  marsYardangRuntime.dustMaterial.opacity = 0.42 + Math.sin(time * 0.7) * 0.04 + marsYardangProximity * 0.1;
+  marsYardangRuntime.landmarkLabel.material.opacity = 0.45 + Math.sin(time * 0.78) * 0.07 + marsYardangProximity * 0.34;
+}
+
+/* ---------- Daedalia complex impact basin ---------- */
+
+let marsImpactBasinDiscovered = false;
+let marsImpactBasinProximity = 0;
+
+function buildMarsImpactBasin() {
+  const group = new THREE.Group();
+  group.name = 'Mars · Daedalia complex impact basin';
+  scene.add(group);
+
+  let seed = 0xdaeda11a;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const dummy = new THREE.Object3D();
+  const instanceColor = new THREE.Color();
+  const radialDirection = new THREE.Vector3();
+  const ringHeading = new THREE.Vector3();
+
+  const brecciaMaterial = new THREE.MeshStandardMaterial({
+    color: 0x6c3529,
+    roughness: 0.98,
+    metalness: 0.02,
+    flatShading: true,
+  });
+  const rimCount = isTouchDevice ? 42 : 76;
+  const rimBlocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), brecciaMaterial, rimCount);
+  rimBlocks.name = 'Shock-fractured rim breccia';
+  for (let index = 0; index < rimCount; index++) {
+    const angle = index * (Math.PI * 2 / rimCount) + (random() - 0.5) * 0.1;
+    radialDirection.copy(MARS_IMPACT_BASIN_TANGENT).applyAxisAngle(MARS_IMPACT_BASIN_NORMAL, angle);
+    const distance = MARS_IMPACT_BASIN_RADIUS * (0.94 + random() * 0.16);
+    const normal = stepWorldNormal(MARS_IMPACT_BASIN_NORMAL, radialDirection, distance, PLANET_RADIUS);
+    const scale = 0.32 + Math.pow(random(), 1.5) * 1.05;
+    dummy.position.copy(surfaceWorldPosition(normal, scale * 0.22));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.24);
+    dummy.scale.set(scale * (0.72 + random() * 0.65), scale * (0.5 + random() * 0.52), scale);
+    dummy.updateMatrix();
+    rimBlocks.setMatrixAt(index, dummy.matrix);
+    rimBlocks.setColorAt(index, instanceColor.setHSL(0.025 + random() * 0.025, 0.38 + random() * 0.18, 0.2 + random() * 0.16));
+  }
+  rimBlocks.instanceMatrix.needsUpdate = true;
+  if (rimBlocks.instanceColor) rimBlocks.instanceColor.needsUpdate = true;
+  group.add(rimBlocks);
+
+  const ledgeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8f4b36,
+    roughness: 1,
+    flatShading: true,
+  });
+  const ledgeCount = isTouchDevice ? 36 : 60;
+  const terraceLedges = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), ledgeMaterial, ledgeCount);
+  terraceLedges.name = 'Slumped concentric crater-wall terraces';
+  const terraceBands = [0.56, 0.71, 0.84];
+  for (let index = 0; index < ledgeCount; index++) {
+    const band = terraceBands[index % terraceBands.length];
+    const angle = index * 2.39996 + random() * 0.16;
+    radialDirection.copy(MARS_IMPACT_BASIN_TANGENT).applyAxisAngle(MARS_IMPACT_BASIN_NORMAL, angle);
+    const distance = MARS_IMPACT_BASIN_RADIUS * (band + (random() - 0.5) * 0.035);
+    const normal = stepWorldNormal(MARS_IMPACT_BASIN_NORMAL, radialDirection, distance, PLANET_RADIUS);
+    ringHeading.copy(radialDirection).cross(normal).normalize();
+    dummy.position.copy(surfaceWorldPosition(normal, 0.08));
+    dummy.quaternion.copy(surfaceVehicleQuaternion(normal, ringHeading));
+    dummy.scale.set(0.5 + random() * 0.42, 0.1 + random() * 0.12, 1.15 + random() * 1.25);
+    dummy.updateMatrix();
+    terraceLedges.setMatrixAt(index, dummy.matrix);
+    terraceLedges.setColorAt(index, instanceColor.setHSL(0.03, 0.42 + random() * 0.12, 0.24 + band * 0.1 + random() * 0.06));
+  }
+  terraceLedges.instanceMatrix.needsUpdate = true;
+  if (terraceLedges.instanceColor) terraceLedges.instanceColor.needsUpdate = true;
+  group.add(terraceLedges);
+
+  const ejectaMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9c5439,
+    roughness: 0.96,
+    flatShading: true,
+  });
+  const ejectaCount = isTouchDevice ? 52 : 92;
+  const ejectaBlocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), ejectaMaterial, ejectaCount);
+  ejectaBlocks.name = 'Ballistic ejecta ray fragments';
+  for (let index = 0; index < ejectaCount; index++) {
+    const rayIndex = index % 7;
+    const angle = (rayIndex * Math.PI * 2 - 0.36) / 7 + (random() - 0.5) * (0.06 + random() * 0.12);
+    radialDirection.copy(MARS_IMPACT_BASIN_TANGENT).applyAxisAngle(MARS_IMPACT_BASIN_NORMAL, angle);
+    const radialFactor = 1.08 + Math.pow(random(), 0.72) * 1.88;
+    const distance = MARS_IMPACT_BASIN_RADIUS * radialFactor;
+    const normal = stepWorldNormal(MARS_IMPACT_BASIN_NORMAL, radialDirection, distance, PLANET_RADIUS);
+    const scale = (0.16 + Math.pow(random(), 2.15) * 0.92) / Math.pow(radialFactor, 0.52);
+    dummy.position.copy(surfaceWorldPosition(normal, scale * 0.2));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.scale.set(scale * (0.65 + random() * 0.8), scale * (0.38 + random() * 0.48), scale);
+    dummy.updateMatrix();
+    ejectaBlocks.setMatrixAt(index, dummy.matrix);
+    ejectaBlocks.setColorAt(index, instanceColor.setHSL(0.027 + random() * 0.018, 0.42 + random() * 0.16, 0.23 + random() * 0.15));
+  }
+  ejectaBlocks.instanceMatrix.needsUpdate = true;
+  if (ejectaBlocks.instanceColor) ejectaBlocks.instanceColor.needsUpdate = true;
+  group.add(ejectaBlocks);
+
+  const meltMaterial = new THREE.MeshStandardMaterial({
+    color: 0x20171a,
+    emissive: 0x180706,
+    emissiveIntensity: 0.18,
+    metalness: 0.18,
+    roughness: 0.58,
+    transparent: true,
+    opacity: 0.88,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+  });
+  const meltCount = isTouchDevice ? 6 : 10;
+  const meltPatches = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(1, 18).rotateX(-Math.PI / 2),
+    meltMaterial,
+    meltCount
+  );
+  meltPatches.name = 'Dark impact-melt remnants';
+  for (let index = 0; index < meltCount; index++) {
+    const angle = random() * Math.PI * 2;
+    radialDirection.copy(MARS_IMPACT_BASIN_TANGENT).applyAxisAngle(MARS_IMPACT_BASIN_NORMAL, angle);
+    const distance = 2.7 + random() * 4.4;
+    const normal = stepWorldNormal(MARS_IMPACT_BASIN_NORMAL, radialDirection, distance, PLANET_RADIUS);
+    dummy.position.copy(surfaceWorldPosition(normal, 0.045));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI);
+    dummy.scale.set(0.75 + random() * 1.5, 1, 0.34 + random() * 0.8);
+    dummy.updateMatrix();
+    meltPatches.setMatrixAt(index, dummy.matrix);
+  }
+  meltPatches.instanceMatrix.needsUpdate = true;
+  group.add(meltPatches);
+
+  const peakMaterial = new THREE.MeshStandardMaterial({ color: 0x512d29, roughness: 0.92, flatShading: true });
+  const peakCount = isTouchDevice ? 7 : 12;
+  const peakOutcrops = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 5), peakMaterial, peakCount);
+  peakOutcrops.name = 'Uplifted central rebound peak bedrock';
+  for (let index = 0; index < peakCount; index++) {
+    const angle = index * 2.39996;
+    radialDirection.copy(MARS_IMPACT_BASIN_TANGENT).applyAxisAngle(MARS_IMPACT_BASIN_NORMAL, angle);
+    const distance = index === 0 ? 0 : 0.55 + random() * 2.15;
+    const normal = stepWorldNormal(MARS_IMPACT_BASIN_NORMAL, radialDirection, distance, PLANET_RADIUS);
+    const height = index === 0 ? 2.1 : 0.65 + random() * 1.4;
+    dummy.position.copy(surfaceWorldPosition(normal, height * 0.44));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.18);
+    dummy.scale.set(0.24 + height * 0.18, height, 0.24 + height * 0.18);
+    dummy.updateMatrix();
+    peakOutcrops.setMatrixAt(index, dummy.matrix);
+    peakOutcrops.setColorAt(index, instanceColor.setHSL(0.018 + random() * 0.025, 0.28 + random() * 0.16, 0.16 + random() * 0.13));
+  }
+  peakOutcrops.instanceMatrix.needsUpdate = true;
+  if (peakOutcrops.instanceColor) peakOutcrops.instanceColor.needsUpdate = true;
+  group.add(peakOutcrops);
+
+  const landmarkLabel = makeLabelSprite('DAEDALIA BASIN · COMPLEX IMPACT CRATER', '#e8a071');
+  landmarkLabel.position.copy(surfaceWorldPosition(MARS_IMPACT_BASIN_NORMAL, 9.6));
+  landmarkLabel.scale.set(6.6, 1.08, 1);
+  scene.add(landmarkLabel);
+
+  return { group, rimBlocks, terraceLedges, ejectaBlocks, meltPatches, meltMaterial, peakOutcrops, landmarkLabel };
+}
+
+const marsImpactBasinRuntime = buildMarsImpactBasin();
+
+function updateMarsImpactBasin(dt, time, activeMarsNormal) {
+  let targetProximity = 0;
+  if (activeMarsNormal) {
+    const distance = geodesicDistance(activeMarsNormal, MARS_IMPACT_BASIN_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 12, 38);
+    if (!marsImpactBasinDiscovered && distance < 22) {
+      marsImpactBasinDiscovered = true;
+      showBanner('DAEDALIA BASIN DISCOVERED · COMPLEX IMPACT STRUCTURE');
+    }
+  }
+  marsImpactBasinProximity = THREE.MathUtils.damp(marsImpactBasinProximity, targetProximity, 5, dt);
+  marsImpactBasinRuntime.meltMaterial.emissiveIntensity = 0.12 + Math.sin(time * 0.38) * 0.025;
+  marsImpactBasinRuntime.landmarkLabel.material.opacity = 0.46 + Math.sin(time * 0.74) * 0.07 + marsImpactBasinProximity * 0.34;
+}
 
 /* ---------- curved paths & spawn signs ---------- */
 
@@ -507,7 +2058,7 @@ function makeLabelSprite(text, colorHex) {
   ctx.shadowColor = 'rgba(0,0,0,0.9)';
   ctx.shadowBlur = 9;
   ctx.fillStyle = colorHex;
-  ctx.fillText(text, 180, 40);
+  ctx.fillText(text, 180, 40, 340);
   const texture = new THREE.CanvasTexture(canvas);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, fog: false }));
   sprite.scale.set(4.8, 1.05, 1);
@@ -539,44 +2090,190 @@ function stdMat(color, opts = {}) {
 }
 
 function buildResearchOutpost(hub) {
-  const baseY = getTerrainHeight(hub.x, hub.z);
   const group = new THREE.Group();
   placeSurfaceGroup(group, hub.normal);
 
-  const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(6, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
-    stdMat(0x8fa5b8, { metalness: 0.6, roughness: 0.35 })
+  const hull = stdMat(0x68747a, { metalness: 0.82, roughness: 0.38, flatShading: true });
+  const scorchedHull = stdMat(0x292c2c, { metalness: 0.62, roughness: 0.72, flatShading: true });
+  const exposedInterior = stdMat(0x080b0d, { metalness: 0.28, roughness: 0.82 });
+  const cockpitGlass = new THREE.MeshPhysicalMaterial({
+    color: 0x173846,
+    emissive: 0x0a3948,
+    emissiveIntensity: 0.52,
+    transparent: true,
+    opacity: 0.68,
+    transmission: 0.18,
+    roughness: 0.16,
+    metalness: 0.18,
+    depthWrite: false,
+  });
+
+  const scorch = new THREE.Mesh(
+    new THREE.CircleGeometry(7.8, 64),
+    new THREE.MeshBasicMaterial({ color: 0x180705, transparent: true, opacity: 0.62, depthWrite: false })
   );
-  group.add(dome);
-  addCollider(hub.x, hub.z, 6.3);
+  scorch.rotation.x = -Math.PI / 2;
+  scorch.scale.set(1.45, 0.72, 1);
+  scorch.position.set(-0.7, 0.025, 1.25);
+  group.add(scorch);
 
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 8, 8), stdMat(0xbbbbbb, { metalness: 0.8 }));
-  antenna.position.y = 6 + 4;
-  group.add(antenna);
-
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.35), stdMat(0xff5544, { emissive: 0xff5544, emissiveIntensity: 1 }));
-  beacon.position.y = 6 + 8;
-  group.add(beacon);
-
-  for (let i = 0; i < 2; i++) {
-    const a = Math.PI * 0.5 + i * Math.PI;
-    const dx = Math.cos(a) * 9;
-    const dz = Math.sin(a) * 9;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6), stdMat(0x999999, { metalness: 0.7 }));
-    pole.position.set(dx, 0.8, dz);
-    group.add(pole);
-    const dish = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.6, 16, 1, true), stdMat(0xd8dde2, { metalness: 0.5, roughness: 0.4, side: THREE.DoubleSide }));
-    dish.rotation.x = Math.PI / 2.2;
-    dish.position.set(dx, 1.7, dz);
-    group.add(dish);
-    addCollider(hub.x + dx, hub.z + dz, 1.2);
+  for (let i = 0; i < 6; i++) {
+    const trenchGeometry = new THREE.CircleGeometry(2.35 + (i % 3) * 0.34, 28);
+    trenchGeometry.rotateX(-Math.PI / 2);
+    const trench = new THREE.Mesh(
+      trenchGeometry,
+      new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0x260b07 : 0x35110b,
+        transparent: true,
+        opacity: 0.48 + i * 0.025,
+        depthWrite: false,
+      })
+    );
+    trench.rotation.y = -0.52 + Math.sin(i * 2.7) * 0.07;
+    trench.scale.set(1.22 + i * 0.04, 1, 0.42 + (i % 2) * 0.09);
+    trench.position.set(2.2 + i * 1.45, 0.052 + i * 0.001, 2.6 + i * 1.05 + Math.sin(i * 1.8) * 0.32);
+    group.add(trench);
   }
 
-  const light = new THREE.PointLight(0x66aaff, 2, 34);
-  light.position.y = 8;
-  group.add(light);
+  const saucer = new THREE.Group();
+  saucer.name = 'Caitlin Projects · downed extraterrestrial craft';
+  saucer.position.set(-0.45, 0.72, 0.15);
+  saucer.rotation.set(-0.11, -0.42, 0.19);
+  group.add(saucer);
 
-  return { group };
+  const lowerDisc = new THREE.Mesh(new THREE.CylinderGeometry(4.75, 3.75, 1.05, 48, 2), scorchedHull);
+  lowerDisc.position.y = 0.58;
+  saucer.add(lowerDisc);
+  const upperDisc = new THREE.Mesh(new THREE.CylinderGeometry(3.95, 5.55, 0.92, 48, 2), hull);
+  upperDisc.position.y = 1.46;
+  saucer.add(upperDisc);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(5.15, 0.33, 10, 64), hull);
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = 1.18;
+  saucer.add(rim);
+
+  const cockpitBase = new THREE.Mesh(new THREE.CylinderGeometry(2.42, 2.88, 0.52, 32), scorchedHull);
+  cockpitBase.position.y = 2.03;
+  saucer.add(cockpitBase);
+  const cockpit = new THREE.Mesh(
+    new THREE.SphereGeometry(2.32, 32, 18, 0, Math.PI * 2, 0, Math.PI / 2),
+    cockpitGlass
+  );
+  cockpit.position.y = 2.23;
+  cockpit.scale.y = 0.78;
+  saucer.add(cockpit);
+
+  const cockpitFrameMaterial = stdMat(0x20292e, { metalness: 0.86, roughness: 0.28 });
+  [-0.82, 0.24, 1.08].forEach((rotation, index) => {
+    const crackFrame = new THREE.Mesh(new THREE.BoxGeometry(0.07, 2.2 - index * 0.25, 0.055), cockpitFrameMaterial);
+    crackFrame.position.set(Math.sin(rotation) * 1.42, 3.28, Math.cos(rotation) * 1.42);
+    crackFrame.rotation.set(0.48, rotation, -0.22 + index * 0.19);
+    saucer.add(crackFrame);
+  });
+
+  for (let i = 0; i < 14; i++) {
+    if (i === 2 || i === 3) continue;
+    const angle = (i / 14) * Math.PI * 2;
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.12, 0.62), i % 4 === 0 ? scorchedHull : hull);
+    panel.position.set(Math.cos(angle) * 4.72, 1.64 + Math.sin(i * 3.7) * 0.11, Math.sin(angle) * 4.72);
+    panel.rotation.y = -angle;
+    panel.rotation.z = Math.sin(i * 2.1) * 0.045;
+    saucer.add(panel);
+  }
+
+  const breach = new THREE.Mesh(new THREE.SphereGeometry(1.18, 9, 7), exposedInterior);
+  breach.position.set(4.25, 1.24, 1.3);
+  breach.scale.set(0.58, 1.02, 1.25);
+  saucer.add(breach);
+  const breachGlow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.78, 18),
+    new THREE.MeshBasicMaterial({ color: 0x58dfff, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, toneMapped: false })
+  );
+  breachGlow.position.set(4.9, 1.24, 1.3);
+  breachGlow.rotation.y = Math.PI / 2;
+  saucer.add(breachGlow);
+
+  for (let i = 0; i < 7; i++) {
+    const tornPlate = new THREE.Mesh(new THREE.ConeGeometry(0.45 + (i % 3) * 0.15, 1.45 + (i % 2) * 0.5, 3), scorchedHull);
+    tornPlate.position.set(4.35 + Math.sin(i * 2.4) * 0.9, 1.18 + Math.cos(i * 1.7) * 0.72, 1.3 + Math.sin(i * 3.1) * 0.9);
+    tornPlate.rotation.set(i * 0.53, i * 0.81, i * 0.37);
+    saucer.add(tornPlate);
+  }
+
+  const recoveryRamp = new THREE.Mesh(new THREE.BoxGeometry(4.1, 0.16, 1.7), scorchedHull);
+  recoveryRamp.position.set(6.4, 0.42, 1.3);
+  recoveryRamp.rotation.z = -0.17;
+  saucer.add(recoveryRamp);
+
+  const rimLights = [];
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * Math.PI * 2;
+    const color = i % 5 === 0 ? 0xff5b35 : 0x68dfff;
+    const lightMaterial = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: i % 4 === 0 ? 0.08 : 1.6,
+      roughness: 0.18,
+    });
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 7), lightMaterial);
+    marker.position.set(Math.cos(angle) * 5.18, 1.22, Math.sin(angle) * 5.18);
+    saucer.add(marker);
+    rimLights.push({ marker, material: lightMaterial, phase: i * 0.73, damaged: i % 4 === 0 });
+  }
+
+  const interiorLight = new THREE.PointLight(0x54dfff, 3.6, 15, 2);
+  interiorLight.position.set(5.25, 1.5, 1.3);
+  saucer.add(interiorLight);
+
+  const smokeCount = 34;
+  const smokePositions = new Float32Array(smokeCount * 3);
+  const smokeBases = new Float32Array(smokeCount * 3);
+  const smokeSpeeds = new Float32Array(smokeCount);
+  for (let i = 0; i < smokeCount; i++) {
+    const x = 4.3 + (Math.random() - 0.5) * 1.5;
+    const y = 1.8 + Math.random() * 4.8;
+    const z = 1.3 + (Math.random() - 0.5) * 1.5;
+    smokePositions[i * 3] = smokeBases[i * 3] = x;
+    smokePositions[i * 3 + 1] = smokeBases[i * 3 + 1] = y;
+    smokePositions[i * 3 + 2] = smokeBases[i * 3 + 2] = z;
+    smokeSpeeds[i] = 0.28 + Math.random() * 0.48;
+  }
+  const smokeGeometry = new THREE.BufferGeometry();
+  smokeGeometry.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
+  const smoke = new THREE.Points(
+    smokeGeometry,
+    new THREE.PointsMaterial({ map: dustTexture, color: 0x544746, size: 1.2, transparent: true, opacity: 0.34, depthWrite: false })
+  );
+  saucer.add(smoke);
+
+  const sparks = [];
+  for (let i = 0; i < 9; i++) {
+    const spark = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055 + (i % 3) * 0.025, 6, 4),
+      new THREE.MeshBasicMaterial({ color: i % 2 ? 0xffb15c : 0x78efff, toneMapped: false })
+    );
+    saucer.add(spark);
+    sparks.push({ mesh: spark, phase: i * 1.37, radius: 0.45 + (i % 4) * 0.22 });
+  }
+
+  for (let i = 0; i < 11; i++) {
+    const angle = i * 2.21;
+    const distance = 6.7 + (i % 5) * 1.05;
+    const scale = 0.35 + (i % 4) * 0.2;
+    const debris = new THREE.Mesh(new THREE.DodecahedronGeometry(scale, 0), i % 3 === 0 ? scorchedHull : hull);
+    debris.position.set(Math.cos(angle) * distance, scale * 0.38, Math.sin(angle) * distance + 1.2);
+    debris.rotation.set(angle, i * 0.67, i * 1.11);
+    group.add(debris);
+    if (i < 5) addCollider(hub.x + debris.position.x, hub.z + debris.position.z, scale * 0.72);
+  }
+
+  const archiveLabel = makeLabelSprite("DOWNED UFO · CAITLIN'S PROJECTS", '#9eeaff');
+  archiveLabel.position.set(0, 7.35, -0.3);
+  archiveLabel.scale.set(7.1, 1.1, 1);
+  group.add(archiveLabel);
+
+  addCollider(hub.x, hub.z, 6.8);
+  return { group, saucer, rimLights, interiorLight, smoke, smokeBases, smokeSpeeds, sparks, breachGlow };
 }
 
 function buildCrystalCavern(hub) {
@@ -716,6 +2413,174 @@ function buildCrashSite(hub) {
   return { group, light, smoke, smokeBases: bases, smokeSpeeds: speeds };
 }
 
+function buildNightfallCave(hub) {
+  const group = new THREE.Group();
+  group.name = 'Nightfall Cave · drive-through tunnel';
+  group.position.copy(surfaceWorldPosition(hub.normal, -0.18));
+  group.quaternion.copy(surfaceVehicleQuaternion(hub.normal, hub.heading));
+  scene.add(group);
+
+  const tunnelMaterial = new THREE.MeshStandardMaterial({
+    color: 0x080403,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.BackSide,
+  });
+  const tunnel = new THREE.Mesh(
+    new THREE.CylinderGeometry(CAVE_INNER_RADIUS, CAVE_INNER_RADIUS, CAVE_TUNNEL_LENGTH, 28, 1, true),
+    tunnelMaterial
+  );
+  tunnel.rotation.x = Math.PI / 2;
+  tunnel.position.y = 0.08;
+  group.add(tunnel);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(CAVE_INNER_RADIUS * 1.82, CAVE_TUNNEL_LENGTH),
+    new THREE.MeshStandardMaterial({ color: 0x160b08, roughness: 1, metalness: 0, side: THREE.DoubleSide })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0.09;
+  group.add(floor);
+
+  const segmentCount = 18;
+  const stonesPerArch = 11;
+  const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x3b1d16, roughness: 1, flatShading: true });
+  const rockShell = new THREE.InstancedMesh(rockGeometry, rockMaterial, segmentCount * stonesPerArch);
+  const rockDummy = new THREE.Object3D();
+  let rockIndex = 0;
+  for (let segment = 0; segment < segmentCount; segment++) {
+    const z = -CAVE_TUNNEL_LENGTH / 2 + (segment / (segmentCount - 1)) * CAVE_TUNNEL_LENGTH;
+    for (let stoneIndex = 0; stoneIndex < stonesPerArch; stoneIndex++) {
+      const angle = (stoneIndex / (stonesPerArch - 1)) * Math.PI;
+      const variation = 0.72 + Math.sin(segment * 4.37 + stoneIndex * 7.13) * 0.32;
+      const shellRadius = CAVE_INNER_RADIUS + 0.65 + variation * 0.45;
+      rockDummy.position.set(
+        Math.cos(angle) * shellRadius,
+        0.15 + Math.sin(angle) * shellRadius,
+        z
+      );
+      rockDummy.rotation.set(
+        angle * 0.21 + segment * 0.09,
+        segment * 0.61 + stoneIndex * 0.37,
+        angle - Math.PI / 2
+      );
+      rockDummy.scale.set(1.25 + variation * 0.55, 1.05 + variation * 0.48, 1.15 + variation * 0.7);
+      rockDummy.updateMatrix();
+      rockShell.setMatrixAt(rockIndex++, rockDummy.matrix);
+    }
+  }
+  rockShell.instanceMatrix.needsUpdate = true;
+  group.add(rockShell);
+
+  const portalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x5a2d20,
+    emissive: 0x5d160a,
+    emissiveIntensity: 2.1,
+    roughness: 0.96,
+  });
+  const entrance = new THREE.Mesh(new THREE.TorusGeometry(CAVE_INNER_RADIUS + 0.35, 0.52, 8, 36), portalMaterial);
+  entrance.position.set(0, 0.15, -CAVE_TUNNEL_LENGTH / 2 - 0.15);
+  group.add(entrance);
+  const exit = entrance.clone();
+  exit.position.z = CAVE_TUNNEL_LENGTH / 2 + 0.15;
+  group.add(exit);
+
+  const portalGlowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff7547,
+    transparent: true,
+    opacity: 0.46,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  [-1, 1].forEach((side) => {
+    const portalGlow = new THREE.Mesh(
+      new THREE.RingGeometry(CAVE_INNER_RADIUS + 0.05, CAVE_INNER_RADIUS + 0.62, 40),
+      portalGlowMaterial
+    );
+    portalGlow.position.set(0, 0.15, side * (CAVE_TUNNEL_LENGTH / 2 + 0.22));
+    group.add(portalGlow);
+  });
+
+  const guideMaterial = new THREE.MeshBasicMaterial({ color: 0xff7446, toneMapped: false });
+  for (let z = -12.5; z <= 12.5; z += 5) {
+    [-1, 1].forEach((side) => {
+      const guide = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.11, 0.8), guideMaterial);
+      guide.position.set(side * (CAVE_INNER_RADIUS - 1.05), 0.22, z);
+      group.add(guide);
+    });
+  }
+
+  const entryLabel = makeLabelSprite('NIGHTFALL CAVE · ENTRANCE', '#ff9a6b');
+  entryLabel.position.set(0, 8.4, -CAVE_TUNNEL_LENGTH / 2 - 0.8);
+  entryLabel.scale.set(7.2, 1.15, 1);
+  group.add(entryLabel);
+  const exitLabel = makeLabelSprite('NIGHTFALL CAVE · EXIT', '#ffc39f');
+  exitLabel.position.set(0, 8.4, CAVE_TUNNEL_LENGTH / 2 + 0.8);
+  exitLabel.scale.set(6.4, 1.05, 1);
+  group.add(exitLabel);
+
+  const caveAccentLights = [];
+  [-1, 1].forEach((side) => {
+    const light = new THREE.PointLight(side < 0 ? 0xff5c35 : 0xff9a60, 1.45, 13, 2);
+    light.position.set(0, 2.8, side * (CAVE_TUNNEL_LENGTH / 2 - 0.6));
+    group.add(light);
+    caveAccentLights.push(light);
+  });
+
+  const stalactiteMaterial = new THREE.MeshStandardMaterial({ color: 0x1b0c09, roughness: 1, flatShading: true });
+  for (let i = 0; i < 15; i++) {
+    const height = 0.75 + ((i * 47) % 9) * 0.16;
+    const stalactite = new THREE.Mesh(new THREE.ConeGeometry(0.25 + (i % 4) * 0.08, height, 7), stalactiteMaterial);
+    stalactite.position.set(Math.sin(i * 2.83) * 3.8, CAVE_INNER_RADIUS - height * 0.42, -12.5 + (i / 14) * 25);
+    stalactite.rotation.z = Math.PI;
+    group.add(stalactite);
+  }
+
+  for (let z = -13.5; z <= 13.5; z += 3.4) {
+    const centerNormal = stepWorldNormal(hub.normal, hub.heading, -z, PLANET_RADIUS);
+    const localRight = hub.right.clone().addScaledVector(centerNormal, -hub.right.dot(centerNormal)).normalize();
+    [-1, 1].forEach((side) => {
+      const wallNormal = stepWorldNormal(centerNormal, localRight, side * (CAVE_INNER_RADIUS + 0.3), PLANET_RADIUS);
+      obstacles.push({ normal: wallNormal, radius: 1.32 });
+    });
+  }
+
+  return { group, caveAccentLights };
+}
+
+const caveDeltaNormal = new THREE.Vector3();
+let caveDarkness = 0;
+let caveWasInside = false;
+
+function updateCaveAtmosphere(dt, listenerNormal, listenerAltitude = 0) {
+  let targetDarkness = 0;
+  if (listenerNormal) {
+    caveDeltaNormal.copy(listenerNormal).sub(NIGHTFALL_CAVE.normal);
+    const along = Math.abs(caveDeltaNormal.dot(NIGHTFALL_CAVE.heading) * PLANET_RADIUS);
+    const across = Math.abs(caveDeltaNormal.dot(NIGHTFALL_CAVE.right) * PLANET_RADIUS);
+    const tunnelDepth = 1 - THREE.MathUtils.smoothstep(along, CAVE_TUNNEL_LENGTH * 0.25, CAVE_TUNNEL_LENGTH * 0.5);
+    const tunnelWidth = 1 - THREE.MathUtils.smoothstep(across, CAVE_INNER_RADIUS * 0.56, CAVE_INNER_RADIUS * 0.92);
+    const roofInfluence = 1 - THREE.MathUtils.smoothstep(listenerAltitude, 2.5, CAVE_INNER_RADIUS + 2);
+    targetDarkness = tunnelDepth * tunnelWidth * roofInfluence;
+  }
+
+  caveDarkness = THREE.MathUtils.damp(caveDarkness, targetDarkness, 5.5, dt);
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, 0.38, caveDarkness);
+  hemisphereLight.intensity = THREE.MathUtils.lerp(0.85, 0.035, caveDarkness);
+  sunLight.intensity = THREE.MathUtils.lerp(1.8, 0.045, caveDarkness);
+  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.018, caveDarkness);
+
+  if (targetDarkness > 0.56 && !caveWasInside) {
+    caveWasInside = true;
+    showBanner('ENTERING NIGHTFALL CAVE · LIGHT LEVEL CRITICAL');
+  } else if (targetDarkness < 0.025 && caveWasInside) {
+    caveWasInside = false;
+    showBanner('CAVE EXIT · DAYLIGHT RESTORED');
+  }
+}
+
 const hubRuntime = {};
 HUBS.forEach((hub) => {
   hub.discovered = false;
@@ -723,14 +2588,18 @@ HUBS.forEach((hub) => {
   if (hub.key === 'cavern') hubRuntime[hub.key] = buildCrystalCavern(hub);
   if (hub.key === 'ruins') hubRuntime[hub.key] = buildAncientRuins(hub);
   if (hub.key === 'crash') hubRuntime[hub.key] = buildCrashSite(hub);
+  if (hub.key === 'nightfall') hubRuntime[hub.key] = buildNightfallCave(hub);
 });
 
 /* ---------- proximity speaker stations ---------- */
 
 function buildSpeakerStation(station, stationIndex) {
   const group = new THREE.Group();
-  const darkMetal = stdMat(0x151821, { metalness: 0.72, roughness: 0.34 });
-  const blackCone = stdMat(0x07090f, { metalness: 0.18, roughness: 0.74 });
+  group.name = `PA-${stationIndex + 1} ${station.name}`;
+  const darkMetal = stdMat(0x20251f, { metalness: 0.7, roughness: 0.42 });
+  const fieldGreen = stdMat(0x4d5941, { metalness: 0.48, roughness: 0.6 });
+  const blackCone = stdMat(0x080b08, { metalness: 0.16, roughness: 0.82, side: THREE.DoubleSide });
+  const canvasWebbing = stdMat(0x8f805e, { metalness: 0.04, roughness: 0.94 });
   const accentMaterial = new THREE.MeshStandardMaterial({
     color: station.color,
     emissive: station.color,
@@ -739,71 +2608,95 @@ function buildSpeakerStation(station, stationIndex) {
     metalness: 0.28,
   });
 
-  const footing = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.65, 0.32, 10), darkMetal);
-  footing.position.y = 0.16;
+  const footing = new THREE.Mesh(new THREE.CylinderGeometry(1.55, 1.8, 0.38, 10), darkMetal);
+  footing.position.y = 0.19;
   group.add(footing);
 
-  const signalRing = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.075, 8, 36), accentMaterial);
+  const signalRing = new THREE.Mesh(new THREE.TorusGeometry(1.43, 0.055, 8, 36), accentMaterial);
   signalRing.rotation.x = Math.PI / 2;
-  signalRing.position.y = 0.36;
+  signalRing.position.y = 0.41;
   group.add(signalRing);
 
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 3.2, 8), darkMetal);
-  mast.position.y = 1.92;
-  group.add(mast);
-
-  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.45, 2.4, 1), darkMetal);
-  cabinet.position.y = 2.05;
-  group.add(cabinet);
-
-  const speakerRims = [];
-  [-1, 1].forEach((face) => {
-    [1.6, 2.45].forEach((height, speakerIndex) => {
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(speakerIndex === 0 ? 0.39 : 0.3, 0.055, 8, 24), accentMaterial);
-      rim.position.set(0, height, face * 0.525);
-      if (face > 0) rim.rotation.y = Math.PI;
-      group.add(rim);
-      speakerRims.push(rim);
-
-      const cone = new THREE.Mesh(
-        new THREE.CylinderGeometry(speakerIndex === 0 ? 0.12 : 0.09, speakerIndex === 0 ? 0.32 : 0.24, 0.14, 20),
-        blackCone
-      );
-      cone.rotation.x = Math.PI / 2;
-      cone.position.set(0, height, face * 0.55);
-      group.add(cone);
+  [-1, 1].forEach((side) => {
+    [-0.74, 0, 0.74].forEach((z) => {
+      const sandbag = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.28, 0.48), canvasWebbing);
+      sandbag.position.set(side * 1.28, 0.5, z);
+      sandbag.rotation.y = side * 0.08 + z * 0.08;
+      group.add(sandbag);
     });
   });
 
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 4.55, 8), darkMetal);
+  mast.position.y = 2.65;
+  group.add(mast);
+
+  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.38, 1.25, 0.82), fieldGreen);
+  cabinet.position.set(0, 1.22, 0.12);
+  group.add(cabinet);
+
+  const cabinetDoor = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.82, 0.045), darkMetal);
+  cabinetDoor.position.set(0, 1.24, -0.43);
+  group.add(cabinetDoor);
+
+  const crossbar = new THREE.Mesh(new THREE.BoxGeometry(3.65, 0.2, 0.2), darkMetal);
+  crossbar.position.y = 4.55;
+  group.add(crossbar);
+
+  const speakerRims = [];
+  [-1.3, 0, 1.3].forEach((x, hornIndex) => {
+    const hornMount = new THREE.Group();
+    hornMount.position.set(x, 4.72, 0);
+    hornMount.rotation.y = (hornIndex - 1) * 0.22;
+
+    const horn = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.7, 1.35, 20, 1, true), fieldGreen);
+    horn.rotation.x = Math.PI / 2;
+    horn.position.z = -0.62;
+    hornMount.add(horn);
+
+    const hornInterior = new THREE.Mesh(new THREE.CircleGeometry(0.58, 24), blackCone);
+    hornInterior.position.z = -1.305;
+    hornMount.add(hornInterior);
+
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.065, 8, 28), accentMaterial);
+    rim.position.z = -1.32;
+    hornMount.add(rim);
+    speakerRims.push(rim);
+
+    const rearDriver = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.42, 14), darkMetal);
+    rearDriver.rotation.x = Math.PI / 2;
+    rearDriver.position.z = 0.18;
+    hornMount.add(rearDriver);
+    group.add(hornMount);
+  });
+
   const equalizerBars = [];
-  [-0.43, 0, 0.43].forEach((x, barIndex) => {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, 0.12), accentMaterial);
-    bar.position.set(x, 3.47, -0.08);
-    bar.rotation.y = barIndex % 2 ? Math.PI / 2 : 0;
+  [-0.34, 0, 0.34].forEach((x) => {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.08), accentMaterial);
+    bar.position.set(x, 1.25, -0.48);
     group.add(bar);
     equalizerBars.push(bar);
   });
 
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.2, 6), darkMetal);
-  antenna.position.y = 4.05;
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.55, 6), darkMetal);
+  antenna.position.set(0.68, 5.75, 0.06);
   group.add(antenna);
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 8), accentMaterial);
-  beacon.position.y = 4.72;
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), accentMaterial);
+  beacon.position.set(0.68, 6.56, 0.06);
   group.add(beacon);
 
-  const light = new THREE.PointLight(station.color, 0.45, 10, 2);
-  light.position.y = 3.4;
+  const light = new THREE.PointLight(station.color, 0.6, 13, 2);
+  light.position.y = 4.8;
   group.add(light);
 
   const labelColor = `#${station.color.toString(16).padStart(6, '0')}`;
-  const label = makeLabelSprite(`♫ ${station.name}`, labelColor);
-  label.position.y = 5.25;
-  label.scale.set(4.4, 0.95, 1);
+  const label = makeLabelSprite(`PA-${stationIndex + 1} · ${station.name}`, labelColor);
+  label.position.y = 6.95;
+  label.scale.set(5.1, 0.95, 1);
   group.add(label);
 
   placeSurfaceGroup(group, station.normal);
   group.rotateY(stationIndex * 1.37 + 0.35);
-  addCollider(station.x, station.z, 1.55);
+  addCollider(station.x, station.z, 1.9);
 
   station.runtime = {
     group,
@@ -864,7 +2757,7 @@ function buildLandingPad(position, normal, labelText, color) {
 }
 
 const MARS_PAD_POSITION = surfaceWorldPosition(MARS_PORT.normal, 0.08);
-const MOON_PAD_POSITION = MOON_CENTER.clone().addScaledVector(MOON_PAD_NORMAL, MOON_RADIUS + 0.08);
+const MOON_PAD_POSITION = MOON_CENTER.clone().addScaledVector(MOON_PAD_NORMAL, MOON_RADIUS + getMoonHeight(MOON_PAD_NORMAL) + 0.08);
 const MARS_DOCK_POSITION = MARS_PAD_POSITION.clone().addScaledVector(MARS_PORT.normal, 0.42);
 const MOON_DOCK_POSITION = MOON_PAD_POSITION.clone().addScaledVector(MOON_PAD_NORMAL, 0.42);
 
@@ -882,6 +2775,1727 @@ const MOON_DOCK_QUATERNION = surfaceVehicleQuaternion(MOON_PAD_NORMAL, MOON_BUS_
 const marsLandingPad = buildLandingPad(MARS_PAD_POSITION, MARS_PORT.normal, '', 0x68d9ff);
 const moonLandingPad = buildLandingPad(MOON_PAD_POSITION, MOON_PAD_NORMAL, 'SPACE BUS · MARS', 0xffd38a);
 addCollider(MARS_PORT.x, MARS_PORT.z, 4.9);
+
+/* ---------- walk-in lunar command center ---------- */
+
+const MOON_COMMAND_ARC_DISTANCE = 15;
+const MOON_COMMAND_INTERACT_RADIUS = 5.6;
+const MOON_COMMAND_NORMAL = stepWorldNormal(MOON_PAD_NORMAL, MOON_BUS_HEADING, MOON_COMMAND_ARC_DISTANCE, MOON_RADIUS);
+const MOON_COMMAND_HEADING = MOON_PAD_NORMAL.clone()
+  .addScaledVector(MOON_COMMAND_NORMAL, -MOON_PAD_NORMAL.dot(MOON_COMMAND_NORMAL))
+  .normalize();
+const MOON_COMMAND_RIGHT = MOON_COMMAND_HEADING.clone().cross(MOON_COMMAND_NORMAL).normalize();
+const MOON_COMMAND_POSITION = MOON_CENTER.clone().addScaledVector(MOON_COMMAND_NORMAL, MOON_RADIUS + getMoonHeight(MOON_COMMAND_NORMAL) + 0.08);
+const MOON_BIKE_DOCK_DIRECTION = MOON_BUS_HEADING.clone().applyAxisAngle(MOON_PAD_NORMAL, Math.PI * 0.56);
+const MOON_BIKE_DOCK_NORMAL = stepWorldNormal(MOON_PAD_NORMAL, MOON_BIKE_DOCK_DIRECTION, 10.5, MOON_RADIUS);
+const MOON_BIKE_HEADING = MOON_PAD_NORMAL.clone()
+  .addScaledVector(MOON_BIKE_DOCK_NORMAL, -MOON_PAD_NORMAL.dot(MOON_BIKE_DOCK_NORMAL))
+  .normalize();
+const ZEPHYRA_BIKE_HEADING = UP.clone().addScaledVector(ZEPHYRA_PAD_NORMAL, -UP.dot(ZEPHYRA_PAD_NORMAL)).normalize();
+let moonCommandSystemsActive = true;
+let moonCommandDiscovered = false;
+let moonCommandInterior = 0;
+
+function buildMoonRegolithGeology() {
+  const group = new THREE.Group();
+  group.name = 'Lunar regolith · micro-craters and ejecta field';
+  scene.add(group);
+
+  let seed = 0x51f15e;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const arcDistance = (a, b) => Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1)) * MOON_RADIUS;
+  const routeSamples = Array.from({ length: 13 }, (_, index) => slerpNormals(MOON_PAD_NORMAL, MOON_COMMAND_NORMAL, index / 12));
+  const isClearOfInfrastructure = (normal, extra = 0) => {
+    if (arcDistance(normal, MOON_PAD_NORMAL) < 6.8 + extra) return false;
+    if (arcDistance(normal, MOON_COMMAND_NORMAL) < 7.1 + extra) return false;
+    if (arcDistance(normal, MOON_BIKE_DOCK_NORMAL) < 5.8 + extra) return false;
+    return !routeSamples.some((sample) => arcDistance(normal, sample) < 2.65 + extra);
+  };
+  const tangentAt = (normal, angle) => {
+    const reference = Math.abs(normal.y) < 0.88 ? UP : new THREE.Vector3(0, 0, -1);
+    return reference.clone()
+      .addScaledVector(normal, -reference.dot(normal))
+      .normalize()
+      .applyAxisAngle(normal, angle);
+  };
+  const randomAccessibleNormal = () => {
+    const direction = MOON_BUS_HEADING.clone().applyAxisAngle(MOON_PAD_NORMAL, random() * Math.PI * 2);
+    return stepWorldNormal(MOON_PAD_NORMAL, direction, 5 + Math.sqrt(random()) * 22, MOON_RADIUS);
+  };
+
+  const craterCount = isTouchDevice ? 18 : 28;
+  const craters = [];
+  for (let attempts = 0; craters.length < craterCount && attempts < 600; attempts++) {
+    const normal = randomAccessibleNormal();
+    const radius = 0.32 + Math.pow(random(), 1.7) * 1.35;
+    if (!isClearOfInfrastructure(normal, radius * 0.65)) continue;
+    if (craters.some((crater) => arcDistance(normal, crater.normal) < radius + crater.radius + 0.55)) continue;
+    craters.push({
+      normal,
+      radius,
+      stretch: 0.78 + random() * 0.42,
+      twist: random() * Math.PI * 2,
+      tone: 0.36 + random() * 0.18,
+    });
+  }
+
+  const craterRimGeometry = new THREE.TorusGeometry(1, 0.14, 6, 18);
+  craterRimGeometry.rotateX(Math.PI / 2);
+  const craterFloorGeometry = new THREE.CircleGeometry(1, 20);
+  craterFloorGeometry.rotateX(-Math.PI / 2);
+  const craterRims = new THREE.InstancedMesh(
+    craterRimGeometry,
+    new THREE.MeshStandardMaterial({ color: 0xa39c96, roughness: 1, metalness: 0, flatShading: true }),
+    craters.length
+  );
+  const craterFloors = new THREE.InstancedMesh(
+    craterFloorGeometry,
+    new THREE.MeshStandardMaterial({ color: 0x575256, roughness: 1, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
+    craters.length
+  );
+  craterRims.name = 'Raised lunar micro-crater rims';
+  craterFloors.name = 'Dark compacted crater floors';
+  const dummy = new THREE.Object3D();
+  const instanceColor = new THREE.Color();
+  craters.forEach((crater, index) => {
+    dummy.position.copy(MOON_CENTER).addScaledVector(crater.normal, MOON_RADIUS + getMoonHeight(crater.normal) + 0.045);
+    dummy.quaternion.setFromUnitVectors(UP, crater.normal);
+    dummy.rotateY(crater.twist);
+    dummy.scale.set(crater.radius, 0.64 + crater.radius * 0.12, crater.radius * crater.stretch);
+    dummy.updateMatrix();
+    craterRims.setMatrixAt(index, dummy.matrix);
+    craterRims.setColorAt(index, instanceColor.setHSL(0.075, 0.045, crater.tone + 0.17));
+
+    dummy.position.copy(MOON_CENTER).addScaledVector(crater.normal, MOON_RADIUS + getMoonHeight(crater.normal) + 0.021);
+    dummy.scale.set(crater.radius * 0.86, 1, crater.radius * crater.stretch * 0.86);
+    dummy.updateMatrix();
+    craterFloors.setMatrixAt(index, dummy.matrix);
+    craterFloors.setColorAt(index, instanceColor.setHSL(0.82, 0.035, crater.tone));
+  });
+  craterRims.instanceMatrix.needsUpdate = true;
+  craterFloors.instanceMatrix.needsUpdate = true;
+  if (craterRims.instanceColor) craterRims.instanceColor.needsUpdate = true;
+  if (craterFloors.instanceColor) craterFloors.instanceColor.needsUpdate = true;
+  group.add(craterFloors, craterRims);
+
+  const boulderGeometry = new THREE.IcosahedronGeometry(1, 0);
+  const boulderPositions = boulderGeometry.attributes.position;
+  for (let index = 0; index < boulderPositions.count; index++) {
+    const x = boulderPositions.getX(index);
+    const y = boulderPositions.getY(index);
+    const z = boulderPositions.getZ(index);
+    const irregularity = 0.74 + hash3(x * 8.1 + 4, y * 7.4 - 9, z * 9.3 + 2) * 0.48;
+    boulderPositions.setXYZ(index, x * irregularity, y * irregularity, z * irregularity);
+  }
+  boulderPositions.needsUpdate = true;
+  boulderGeometry.computeVertexNormals();
+
+  const boulderCount = isTouchDevice ? 90 : 170;
+  const boulders = new THREE.InstancedMesh(
+    boulderGeometry,
+    new THREE.MeshStandardMaterial({ color: 0x908984, roughness: 0.98, metalness: 0, flatShading: true }),
+    boulderCount
+  );
+  boulders.name = 'Angular ejecta boulders';
+  let placedBoulders = 0;
+  for (let attempts = 0; placedBoulders < boulderCount && attempts < 1800; attempts++) {
+    const ejectaCrater = random() < 0.72 ? craters[Math.floor(random() * craters.length)] : null;
+    let normal;
+    let scale;
+    if (ejectaCrater) {
+      const direction = tangentAt(ejectaCrater.normal, random() * Math.PI * 2);
+      const scatterDistance = ejectaCrater.radius * (1.25 + Math.pow(random(), 0.68) * 3.6);
+      normal = stepWorldNormal(ejectaCrater.normal, direction, scatterDistance, MOON_RADIUS);
+      scale = 0.075 + random() * Math.min(0.42, ejectaCrater.radius * 0.38);
+    } else {
+      normal = randomAccessibleNormal();
+      scale = 0.1 + Math.pow(random(), 2.2) * 0.72;
+    }
+    if (!isClearOfInfrastructure(normal, scale * 0.7)) continue;
+
+    dummy.position.copy(MOON_CENTER).addScaledVector(normal, MOON_RADIUS + getMoonHeight(normal) + 0.035 + scale * 0.42);
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.5);
+    dummy.scale.set(
+      scale * (0.72 + random() * 0.55),
+      scale * (0.62 + random() * 0.9),
+      scale * (0.7 + random() * 0.62)
+    );
+    dummy.updateMatrix();
+    boulders.setMatrixAt(placedBoulders, dummy.matrix);
+    boulders.setColorAt(placedBoulders, instanceColor.setHSL(0.07, 0.035, 0.44 + random() * 0.2));
+    placedBoulders += 1;
+  }
+  boulders.count = placedBoulders;
+  boulders.instanceMatrix.needsUpdate = true;
+  if (boulders.instanceColor) boulders.instanceColor.needsUpdate = true;
+  group.add(boulders);
+
+  return { group, craterRims, craterFloors, boulders, craterCount: craters.length, boulderCount: placedBoulders };
+}
+
+const moonRegolithGeology = buildMoonRegolithGeology();
+
+const MOON_COLD_TRAP_HEADING = tangentHeadingForNormal(MOON_COLD_TRAP_NORMAL);
+let moonColdTrapDiscovered = false;
+let moonColdTrapProximity = 0;
+
+function buildMoonColdTrap() {
+  const group = new THREE.Group();
+  group.name = 'PSR-01 permanently shadowed lunar cold trap';
+  scene.add(group);
+
+  let seed = 0xc01d7a9;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const tangentAt = (normal, angle) => tangentHeadingForNormal(normal).applyAxisAngle(normal, angle);
+  const dummy = new THREE.Object3D();
+
+  const iceMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xb9d9dc,
+    emissive: 0x375d68,
+    emissiveIntensity: 0.22,
+    metalness: 0.08,
+    roughness: 0.24,
+    clearcoat: 0.72,
+    clearcoatRoughness: 0.2,
+    transparent: true,
+    opacity: 0.82,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+  const iceCount = isTouchDevice ? 12 : 22;
+  const icePatches = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 18).rotateX(-Math.PI / 2), iceMaterial, iceCount);
+  icePatches.name = 'Exposed lunar water-ice patches';
+  for (let index = 0; index < iceCount; index++) {
+    const direction = tangentAt(MOON_COLD_TRAP_NORMAL, random() * Math.PI * 2);
+    const normal = stepWorldNormal(MOON_COLD_TRAP_NORMAL, direction, 0.35 + Math.sqrt(random()) * 1.75, MOON_RADIUS);
+    dummy.position.copy(surfacePositionForWorld('moon', normal, 0.14));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.scale.set(0.28 + random() * 0.72, 1, 0.18 + random() * 0.52);
+    dummy.updateMatrix();
+    icePatches.setMatrixAt(index, dummy.matrix);
+  }
+  icePatches.instanceMatrix.needsUpdate = true;
+  group.add(icePatches);
+
+  const ejectaMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc8c0b7,
+    roughness: 1,
+    metalness: 0,
+    flatShading: true,
+  });
+  const ejectaCount = isTouchDevice ? 30 : 54;
+  const ejecta = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), ejectaMaterial, ejectaCount);
+  ejecta.name = 'Radial cold-trap ejecta rays';
+  let placed = 0;
+  for (let attempts = 0; placed < ejectaCount && attempts < 700; attempts++) {
+    const angle = random() * Math.PI * 2;
+    const direction = tangentAt(MOON_COLD_TRAP_NORMAL, angle);
+    const distance = MOON_COLD_TRAP_RADIUS * (1.05 + Math.pow(random(), 0.72) * 1.25);
+    const normal = stepWorldNormal(MOON_COLD_TRAP_NORMAL, direction, distance, MOON_RADIUS);
+    if (arcDistanceForWorld('moon', normal, MOON_PAD_NORMAL) < 6.5) continue;
+    if (arcDistanceForWorld('moon', normal, MOON_COMMAND_NORMAL) < 6.4) continue;
+    if (arcDistanceForWorld('moon', normal, MOON_BIKE_DOCK_NORMAL) < 5.3) continue;
+    const outward = direction.clone().addScaledVector(normal, -direction.dot(normal)).normalize();
+    dummy.position.copy(surfacePositionForWorld('moon', normal, 0.055));
+    dummy.quaternion.copy(surfaceVehicleQuaternion(normal, outward.clone().multiplyScalar(-1)));
+    const length = 0.48 + Math.pow(random(), 1.35) * 1.35;
+    dummy.scale.set(0.08 + random() * 0.16, 0.035 + random() * 0.055, length);
+    dummy.updateMatrix();
+    ejecta.setMatrixAt(placed, dummy.matrix);
+    placed += 1;
+  }
+  ejecta.count = placed;
+  ejecta.instanceMatrix.needsUpdate = true;
+  group.add(ejecta);
+
+  const landmarkLabel = makeLabelSprite('PSR-01 · ICE COLD TRAP', '#a8e8f4');
+  landmarkLabel.position.copy(surfacePositionForWorld('moon', MOON_COLD_TRAP_NORMAL, 6.15));
+  landmarkLabel.scale.set(5.5, 0.98, 1);
+  group.add(landmarkLabel);
+
+  return { group, icePatches, iceMaterial, ejecta, landmarkLabel };
+}
+
+const moonColdTrapRuntime = buildMoonColdTrap();
+
+function updateMoonColdTrap(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('moon', activePlayerNormal, MOON_COLD_TRAP_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 5.2, 14.5);
+    if (!moonColdTrapDiscovered && distance < 7.4) {
+      moonColdTrapDiscovered = true;
+      showBanner('PSR-01 COLD TRAP DISCOVERED · WATER ICE SIGNATURE CONFIRMED');
+    }
+  }
+  moonColdTrapProximity = THREE.MathUtils.damp(moonColdTrapProximity, targetProximity, 5, dt);
+  moonColdTrapRuntime.iceMaterial.emissiveIntensity = 0.14 + (Math.sin(time * 1.45) * 0.5 + 0.5) * 0.13 + moonColdTrapProximity * 0.12;
+  moonColdTrapRuntime.landmarkLabel.material.opacity = 0.46 + Math.sin(time * 1.2) * 0.08 + moonColdTrapProximity * 0.32;
+}
+
+let moonRayedCraterDiscovered = false;
+let moonRayedCraterProximity = 0;
+
+function buildMoonRayedCrater() {
+  const group = new THREE.Group();
+  group.name = 'Tycho Minor · rayed lunar impact crater and secondary chain';
+  scene.add(group);
+
+  let seed = 0x7ac401;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const tangentAt = (normal, angle) => tangentHeadingForNormal(normal).applyAxisAngle(normal, angle);
+  const dummy = new THREE.Object3D();
+  const instanceColor = new THREE.Color();
+
+  const rimCount = isTouchDevice ? 34 : 58;
+  const rimBlocks = new THREE.InstancedMesh(
+    new THREE.DodecahedronGeometry(1, 0),
+    new THREE.MeshStandardMaterial({ color: 0xb8b2aa, roughness: 1, flatShading: true }),
+    rimCount
+  );
+  rimBlocks.name = 'Fresh blocky primary crater rim';
+  for (let index = 0; index < rimCount; index++) {
+    const angle = (index / rimCount) * Math.PI * 2 + (random() - 0.5) * 0.11;
+    const direction = tangentAt(MOON_RAY_CRATER_NORMAL, angle);
+    const distance = MOON_RAY_CRATER_RADIUS * (0.94 + random() * 0.15);
+    const normal = stepWorldNormal(MOON_RAY_CRATER_NORMAL, direction, distance, MOON_RADIUS);
+    const scale = 0.16 + Math.pow(random(), 1.75) * 0.58;
+    dummy.position.copy(surfacePositionForWorld('moon', normal, scale * 0.3 + 0.04));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.38);
+    dummy.scale.set(scale * (0.7 + random() * 0.72), scale * (0.62 + random() * 0.8), scale);
+    dummy.updateMatrix();
+    rimBlocks.setMatrixAt(index, dummy.matrix);
+    rimBlocks.setColorAt(index, instanceColor.setHSL(0.075, 0.025, 0.55 + random() * 0.2));
+  }
+  rimBlocks.instanceMatrix.needsUpdate = true;
+  if (rimBlocks.instanceColor) rimBlocks.instanceColor.needsUpdate = true;
+  group.add(rimBlocks);
+
+  const rayCount = isTouchDevice ? 48 : 86;
+  const rayMaterial = new THREE.MeshStandardMaterial({ color: 0xd6d0c7, roughness: 1, flatShading: true });
+  const rayFragments = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), rayMaterial, rayCount);
+  rayFragments.name = 'High-albedo radial ejecta rays';
+  const rayAngles = [-2.72, -1.86, -0.91, -0.12, 0.77, 1.58, 2.42];
+  for (let index = 0; index < rayCount; index++) {
+    const rayAngle = rayAngles[index % rayAngles.length] + (random() - 0.5) * 0.1;
+    const direction = tangentAt(MOON_RAY_CRATER_NORMAL, rayAngle);
+    const distance = MOON_RAY_CRATER_RADIUS * 1.08 + Math.pow(random(), 0.66) * 10.2;
+    const normal = stepWorldNormal(MOON_RAY_CRATER_NORMAL, direction, distance, MOON_RADIUS);
+    const outward = direction.clone().addScaledVector(normal, -direction.dot(normal)).normalize();
+    const length = 0.34 + Math.pow(random(), 1.2) * 1.25;
+    dummy.position.copy(surfacePositionForWorld('moon', normal, 0.035));
+    dummy.quaternion.copy(surfaceVehicleQuaternion(normal, outward.clone().multiplyScalar(-1)));
+    dummy.scale.set(0.055 + random() * 0.15, 0.025 + random() * 0.045, length);
+    dummy.updateMatrix();
+    rayFragments.setMatrixAt(index, dummy.matrix);
+    rayFragments.setColorAt(index, instanceColor.setHSL(0.07, 0.02, 0.68 + random() * 0.18));
+  }
+  rayFragments.instanceMatrix.needsUpdate = true;
+  if (rayFragments.instanceColor) rayFragments.instanceColor.needsUpdate = true;
+  group.add(rayFragments);
+
+  const secondaryRims = new THREE.InstancedMesh(
+    new THREE.TorusGeometry(1, 0.11, 6, 22).rotateX(Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xbdb7ae, roughness: 1, flatShading: true }),
+    MOON_SECONDARY_CRATERS.length
+  );
+  const secondaryFloors = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(1, 22).rotateX(-Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0x504d50, roughness: 1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
+    MOON_SECONDARY_CRATERS.length
+  );
+  MOON_SECONDARY_CRATERS.forEach((crater, index) => {
+    dummy.position.copy(surfacePositionForWorld('moon', crater.normal, 0.045));
+    dummy.quaternion.setFromUnitVectors(UP, crater.normal);
+    dummy.scale.set(crater.radius, 0.7, crater.radius * (0.83 + index * 0.035));
+    dummy.updateMatrix();
+    secondaryRims.setMatrixAt(index, dummy.matrix);
+    dummy.position.copy(surfacePositionForWorld('moon', crater.normal, 0.018));
+    dummy.scale.set(crater.radius * 0.84, 1, crater.radius * (0.7 + index * 0.03));
+    dummy.updateMatrix();
+    secondaryFloors.setMatrixAt(index, dummy.matrix);
+  });
+  secondaryRims.instanceMatrix.needsUpdate = true;
+  secondaryFloors.instanceMatrix.needsUpdate = true;
+  group.add(secondaryFloors, secondaryRims);
+
+  const peakCount = isTouchDevice ? 6 : 10;
+  const centralPeaks = new THREE.InstancedMesh(
+    new THREE.ConeGeometry(1, 1, 5),
+    new THREE.MeshStandardMaterial({ color: 0xd0c9c0, roughness: 0.96, flatShading: true }),
+    peakCount
+  );
+  for (let index = 0; index < peakCount; index++) {
+    const direction = tangentAt(MOON_RAY_CRATER_NORMAL, random() * Math.PI * 2);
+    const normal = stepWorldNormal(MOON_RAY_CRATER_NORMAL, direction, random() * 0.62, MOON_RADIUS);
+    const height = 0.34 + random() * 0.78;
+    dummy.position.copy(surfacePositionForWorld('moon', normal, height * 0.42));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.scale.set(0.2 + random() * 0.34, height, 0.2 + random() * 0.3);
+    dummy.updateMatrix();
+    centralPeaks.setMatrixAt(index, dummy.matrix);
+  }
+  centralPeaks.instanceMatrix.needsUpdate = true;
+  group.add(centralPeaks);
+
+  const landmarkLabel = makeLabelSprite('TYCHO MINOR · RAYED CRATER', '#ded8ce');
+  landmarkLabel.position.copy(surfacePositionForWorld('moon', MOON_RAY_CRATER_NORMAL, 6.8));
+  landmarkLabel.scale.set(5.9, 1.05, 1);
+  group.add(landmarkLabel);
+
+  return { group, rimBlocks, rayFragments, rayMaterial, secondaryRims, secondaryFloors, centralPeaks, landmarkLabel };
+}
+
+const moonRayedCraterRuntime = buildMoonRayedCrater();
+
+function updateMoonRayedCrater(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('moon', activePlayerNormal, MOON_RAY_CRATER_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 5.4, 15.5);
+    if (!moonRayedCraterDiscovered && distance < 8.1) {
+      moonRayedCraterDiscovered = true;
+      showBanner('TYCHO MINOR DISCOVERED · FRESH RAY SYSTEM AND SECONDARY IMPACTS');
+    }
+  }
+  moonRayedCraterProximity = THREE.MathUtils.damp(moonRayedCraterProximity, targetProximity, 5, dt);
+  moonRayedCraterRuntime.rayMaterial.emissive.setHex(0x161311);
+  moonRayedCraterRuntime.rayMaterial.emissiveIntensity = 0.04 + moonRayedCraterProximity * 0.08;
+  moonRayedCraterRuntime.landmarkLabel.material.opacity = 0.46 + Math.sin(time * 0.9) * 0.06 + moonRayedCraterProximity * 0.34;
+}
+
+/* ---------- Zephyra hyperspeed electric bike ---------- */
+
+const MOON_BIKE_PAD_POSITION = MOON_CENTER.clone().addScaledVector(MOON_BIKE_DOCK_NORMAL, MOON_RADIUS + getMoonHeight(MOON_BIKE_DOCK_NORMAL) + 0.08);
+const ZEPHYRA_BIKE_PAD_POSITION = ZEPHYRA_CENTER.clone().addScaledVector(
+  ZEPHYRA_PAD_NORMAL,
+  ZEPHYRA_RADIUS + getZephyraHeight(ZEPHYRA_PAD_NORMAL) + 0.08
+);
+const MOON_BIKE_DOCK_POSITION = MOON_BIKE_PAD_POSITION.clone().addScaledVector(MOON_BIKE_DOCK_NORMAL, 0.42);
+const ZEPHYRA_BIKE_DOCK_POSITION = ZEPHYRA_BIKE_PAD_POSITION.clone().addScaledVector(ZEPHYRA_PAD_NORMAL, 0.42);
+const MOON_BIKE_DOCK_QUATERNION = surfaceVehicleQuaternion(MOON_BIKE_DOCK_NORMAL, MOON_BIKE_HEADING);
+const ZEPHYRA_BIKE_DOCK_QUATERNION = surfaceVehicleQuaternion(ZEPHYRA_PAD_NORMAL, ZEPHYRA_BIKE_HEADING);
+const moonBikeLandingPad = buildLandingPad(MOON_BIKE_PAD_POSITION, MOON_BIKE_DOCK_NORMAL, 'VOLT BIKE · ZEPHYRA', 0x78ffe2);
+const zephyraBikeLandingPad = buildLandingPad(ZEPHYRA_BIKE_PAD_POSITION, ZEPHYRA_PAD_NORMAL, 'VOLT BIKE · MOON', 0xb38cff);
+
+function buildHyperBike() {
+  const bike = new THREE.Group();
+  bike.name = 'Voltwing hyperspeed electric space bike';
+  const frame = stdMat(0x111b29, { metalness: 0.86, roughness: 0.24 });
+  const shell = stdMat(0x7454f5, { metalness: 0.52, roughness: 0.25 });
+  const chrome = stdMat(0xc7f7ff, { metalness: 0.9, roughness: 0.12 });
+  const electricMaterial = new THREE.MeshStandardMaterial({
+    color: 0x72ffe0,
+    emissive: 0x34e7d0,
+    emissiveIntensity: 2.2,
+    metalness: 0.28,
+    roughness: 0.18,
+  });
+
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.34, 2.85), frame);
+  spine.position.y = 1.05;
+  bike.add(spine);
+  const battery = new THREE.Mesh(new THREE.CapsuleGeometry(0.48, 1.05, 7, 16), shell);
+  battery.rotation.x = Math.PI / 2;
+  battery.position.set(0, 1.16, 0.22);
+  bike.add(battery);
+
+  const wheelRings = [];
+  [-1.5, 1.5].forEach((z) => {
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.105, 8, 32), electricMaterial);
+    wheel.rotation.y = Math.PI / 2;
+    wheel.position.set(0, 0.83, z);
+    bike.add(wheel);
+    wheelRings.push(wheel);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.34, 12), chrome);
+    hub.rotation.z = Math.PI / 2;
+    hub.position.copy(wheel.position);
+    bike.add(hub);
+  });
+
+  const fork = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 1.42, 8), chrome);
+  fork.position.set(0, 1.38, -1.45);
+  fork.rotation.x = -0.28;
+  bike.add(fork);
+  const handlebar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.35, 8), chrome);
+  handlebar.rotation.z = Math.PI / 2;
+  handlebar.position.set(0, 1.98, -1.66);
+  bike.add(handlebar);
+  [-0.62, 0.62].forEach((x) => {
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.3, 10), frame);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(x, 1.98, -1.66);
+    bike.add(grip);
+  });
+
+  const saddle = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.72, 6, 14), stdMat(0x17151f, { roughness: 0.58 }));
+  saddle.rotation.x = Math.PI / 2;
+  saddle.scale.x = 1.45;
+  saddle.position.set(0, 1.68, 0.48);
+  bike.add(saddle);
+
+  const electricCore = new THREE.Mesh(new THREE.SphereGeometry(0.29, 18, 12), electricMaterial);
+  electricCore.position.set(0, 1.12, 0.1);
+  bike.add(electricCore);
+  const headlight = new THREE.PointLight(0x84ffe6, 3.2, 16, 2);
+  headlight.position.set(0, 1.42, -1.76);
+  bike.add(headlight);
+
+  const bikeSeat = new THREE.Group();
+  bikeSeat.position.set(0, 1.74, 0.42);
+  bike.add(bikeSeat);
+
+  const warpTail = new THREE.Group();
+  for (let index = 0; index < 5; index++) {
+    const tail = new THREE.Mesh(
+      new THREE.ConeGeometry(0.34 - index * 0.035, 2.6 + index * 0.72, 10),
+      new THREE.MeshBasicMaterial({
+        color: index % 2 ? 0xa983ff : 0x6effe1,
+        transparent: true,
+        opacity: 0.34 - index * 0.045,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    tail.rotation.x = Math.PI / 2;
+    tail.position.set((index - 2) * 0.12, 1.02 + Math.sin(index) * 0.08, 2.55 + index * 0.4);
+    warpTail.add(tail);
+  }
+  warpTail.visible = false;
+  bike.add(warpTail);
+
+  bike.position.copy(MOON_BIKE_DOCK_POSITION);
+  bike.quaternion.copy(MOON_BIKE_DOCK_QUATERNION);
+  scene.add(bike);
+  return { bike, bikeSeat, wheelRings, electricCore, electricMaterial, headlight, warpTail };
+}
+
+const hyperBikeRuntime = buildHyperBike();
+const hyperBike = hyperBikeRuntime.bike;
+
+/* ---------- Zephyra resonance spires & electric storm ---------- */
+
+const ZEPHYRA_SPIRE_DIRECTION = ZEPHYRA_BIKE_HEADING.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, -0.84);
+const ZEPHYRA_SPIRE_NORMAL = stepWorldNormal(ZEPHYRA_PAD_NORMAL, ZEPHYRA_SPIRE_DIRECTION, 14.2, ZEPHYRA_RADIUS);
+const ZEPHYRA_SPIRE_HEADING = ZEPHYRA_PAD_NORMAL.clone()
+  .addScaledVector(ZEPHYRA_SPIRE_NORMAL, -ZEPHYRA_PAD_NORMAL.dot(ZEPHYRA_SPIRE_NORMAL))
+  .normalize();
+const ZEPHYRA_SPIRE_RIGHT = ZEPHYRA_SPIRE_HEADING.clone().cross(ZEPHYRA_SPIRE_NORMAL).normalize();
+const ZEPHYRA_FLUX_DIRECTION = ZEPHYRA_BIKE_HEADING.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, 2.08);
+const ZEPHYRA_FLUX_NORMAL = stepWorldNormal(ZEPHYRA_PAD_NORMAL, ZEPHYRA_FLUX_DIRECTION, 18.4, ZEPHYRA_RADIUS);
+const ZEPHYRA_AURORA_DIRECTION = ZEPHYRA_BIKE_HEADING.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, -2.42);
+const ZEPHYRA_AURORA_NORMAL = stepWorldNormal(ZEPHYRA_PAD_NORMAL, ZEPHYRA_AURORA_DIRECTION, 19.6, ZEPHYRA_RADIUS);
+const ZEPHYRA_GROVE_DIRECTION = ZEPHYRA_BIKE_HEADING.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, 1.42);
+const ZEPHYRA_GROVE_NORMAL = stepWorldNormal(ZEPHYRA_PAD_NORMAL, ZEPHYRA_GROVE_DIRECTION, 13.8, ZEPHYRA_RADIUS);
+let zephyraSpireDiscovered = false;
+let zephyraStormProximity = 0;
+let zephyraCanyonDiscovered = false;
+let zephyraCanyonProximity = 0;
+let zephyraFluxDiscovered = false;
+let zephyraFluxProximity = 0;
+let zephyraAuroraDiscovered = false;
+let zephyraAuroraProximity = 0;
+let zephyraGroveDiscovered = false;
+let zephyraGroveProximity = 0;
+let zephyraGroveArrivalCharge = 0;
+
+function buildZephyraStormField() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · Resonance Spire electric storm field';
+  scene.add(group);
+
+  let seed = 0xe1ec7a;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const arcDistance = (a, b) => Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1)) * ZEPHYRA_RADIUS;
+  const tangentAt = (normal, angle) => {
+    const reference = Math.abs(normal.y) < 0.88 ? UP : new THREE.Vector3(0, 0, -1);
+    return reference.clone().addScaledVector(normal, -reference.dot(normal)).normalize().applyAxisAngle(normal, angle);
+  };
+
+  const crystalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x6debd2,
+    emissive: 0x234f72,
+    emissiveIntensity: 1.05,
+    metalness: 0.24,
+    roughness: 0.24,
+    flatShading: true,
+  });
+  const crystalCount = isTouchDevice ? 58 : 108;
+  const crystals = new THREE.InstancedMesh(new THREE.ConeGeometry(0.7, 1, 6), crystalMaterial, crystalCount);
+  crystals.name = 'Resonant crystal geology';
+  const dummy = new THREE.Object3D();
+  const color = new THREE.Color();
+  let placed = 0;
+  for (let attempts = 0; placed < crystalCount && attempts < 1400; attempts++) {
+    let normal;
+    let height;
+    if (placed < 24) {
+      const direction = tangentAt(ZEPHYRA_SPIRE_NORMAL, random() * Math.PI * 2);
+      normal = stepWorldNormal(ZEPHYRA_SPIRE_NORMAL, direction, Math.pow(random(), 0.72) * 5.2, ZEPHYRA_RADIUS);
+      height = 1.8 + Math.pow(random(), 0.58) * 6.4;
+    } else {
+      const direction = ZEPHYRA_BIKE_HEADING.clone().applyAxisAngle(ZEPHYRA_PAD_NORMAL, random() * Math.PI * 2);
+      normal = stepWorldNormal(ZEPHYRA_PAD_NORMAL, direction, 7 + Math.sqrt(random()) * 22, ZEPHYRA_RADIUS);
+      height = 0.45 + Math.pow(random(), 2.1) * 3.8;
+    }
+    if (arcDistance(normal, ZEPHYRA_PAD_NORMAL) < 6.5) continue;
+    const width = 0.16 + height * (0.055 + random() * 0.035);
+    dummy.position.copy(surfacePositionForWorld('zephyra', normal, height * 0.48));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.16);
+    dummy.scale.set(width * (0.78 + random() * 0.5), height, width * (0.78 + random() * 0.5));
+    dummy.updateMatrix();
+    crystals.setMatrixAt(placed, dummy.matrix);
+    crystals.setColorAt(placed, color.setHSL(0.43 + random() * 0.23, 0.72, 0.46 + Math.min(0.24, height * 0.025)));
+    placed += 1;
+  }
+  crystals.count = placed;
+  crystals.instanceMatrix.needsUpdate = true;
+  if (crystals.instanceColor) crystals.instanceColor.needsUpdate = true;
+  group.add(crystals);
+
+  const pathCount = 9;
+  const pathMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc596ff,
+    emissive: 0x814dff,
+    emissiveIntensity: 1.5,
+    roughness: 0.34,
+  });
+  const pathMarkers = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.31, 0.31, 0.07, 12), pathMaterial, pathCount);
+  for (let index = 0; index < pathCount; index++) {
+    const normal = slerpNormals(ZEPHYRA_PAD_NORMAL, ZEPHYRA_SPIRE_NORMAL, (index + 1) / (pathCount + 1));
+    dummy.position.copy(surfacePositionForWorld('zephyra', normal, 0.065));
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.scale.setScalar(1);
+    dummy.updateMatrix();
+    pathMarkers.setMatrixAt(index, dummy.matrix);
+  }
+  pathMarkers.instanceMatrix.needsUpdate = true;
+  group.add(pathMarkers);
+
+  const shardMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb19aff,
+    emissive: 0x5930d8,
+    emissiveIntensity: 1.6,
+    metalness: 0.38,
+    roughness: 0.2,
+    flatShading: true,
+  });
+  const floatingShards = [];
+  for (let index = 0; index < (isTouchDevice ? 9 : 16); index++) {
+    const direction = tangentAt(ZEPHYRA_SPIRE_NORMAL, random() * Math.PI * 2);
+    const normal = stepWorldNormal(ZEPHYRA_SPIRE_NORMAL, direction, 2.1 + random() * 5.8, ZEPHYRA_RADIUS);
+    const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.42 + random() * 0.48, 0), shardMaterial);
+    shard.scale.set(0.6 + random() * 0.55, 1.1 + random() * 1.65, 0.62 + random() * 0.52);
+    group.add(shard);
+    floatingShards.push({
+      mesh: shard,
+      normal,
+      altitude: 1.7 + random() * 4.2,
+      phase: random() * Math.PI * 2,
+      spin: 0.25 + random() * 0.75,
+    });
+  }
+
+  const boltMaterial = new THREE.LineBasicMaterial({
+    color: 0xd9faff,
+    transparent: true,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const lightningBolts = [];
+  for (let index = 0; index < 3; index++) {
+    const direction = tangentAt(ZEPHYRA_SPIRE_NORMAL, index * (Math.PI * 2 / 3) + 0.45);
+    const targetNormal = stepWorldNormal(ZEPHYRA_SPIRE_NORMAL, direction, 1.4 + index * 1.1, ZEPHYRA_RADIUS);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(10 * 3), 3));
+    const bolt = new THREE.Line(geometry, boltMaterial.clone());
+    const glow = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color: 0xbff9ff,
+        size: 0.34,
+        transparent: true,
+        opacity: 0.84,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    bolt.visible = false;
+    glow.visible = false;
+    group.add(bolt, glow);
+    lightningBolts.push({ line: bolt, glow, targetNormal, phase: index * 1.73 });
+  }
+
+  const stormLight = new THREE.PointLight(0xc5ecff, 0, 42, 2);
+  stormLight.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_SPIRE_NORMAL, 7));
+  group.add(stormLight);
+  const landmarkLabel = makeLabelSprite('RESONANCE SPIRES', '#bca0ff');
+  landmarkLabel.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_SPIRE_NORMAL, 8.6));
+  landmarkLabel.scale.set(5.4, 1.02, 1);
+  group.add(landmarkLabel);
+
+  return { group, crystals, crystalMaterial, pathMarkers, pathMaterial, floatingShards, shardMaterial, lightningBolts, stormLight, landmarkLabel };
+}
+
+const zephyraStormRuntime = buildZephyraStormField();
+const zephyraBoltPoint = new THREE.Vector3();
+const zephyraBoltTop = new THREE.Vector3();
+const zephyraBoltBottom = new THREE.Vector3();
+let zephyraBoltFrame = -1;
+
+function regenerateZephyraBolt(bolt, time) {
+  const positions = bolt.line.geometry.attributes.position;
+  zephyraBoltBottom.copy(surfacePositionForWorld('zephyra', bolt.targetNormal, 1.8));
+  zephyraBoltTop.copy(zephyraBoltBottom).addScaledVector(bolt.targetNormal, 9.5 + Math.sin(time * 1.7 + bolt.phase) * 1.3);
+  const tangent = tangentHeadingForNormal(bolt.targetNormal);
+  const right = tangent.clone().cross(bolt.targetNormal).normalize();
+  for (let index = 0; index < positions.count; index++) {
+    const progress = index / (positions.count - 1);
+    const jitter = Math.sin(progress * Math.PI);
+    zephyraBoltPoint.copy(zephyraBoltTop).lerp(zephyraBoltBottom, progress)
+      .addScaledVector(tangent, (Math.random() - 0.5) * jitter * 1.05)
+      .addScaledVector(right, (Math.random() - 0.5) * jitter * 1.05);
+    positions.setXYZ(index, zephyraBoltPoint.x, zephyraBoltPoint.y, zephyraBoltPoint.z);
+  }
+  positions.needsUpdate = true;
+}
+
+function updateZephyraStorm(dt, time, activePlayerNormal) {
+  const stormWave = Math.sin(time * 2.05) + Math.sin(time * 7.7) * 0.62 + Math.sin(time * 13.1) * 0.28;
+  const flash = Math.pow(Math.max(0, stormWave - 0.82), 2);
+  const frame = Math.floor(time * 13);
+  if (flash > 0.015 && frame !== zephyraBoltFrame) {
+    zephyraBoltFrame = frame;
+    zephyraStormRuntime.lightningBolts.forEach((bolt) => regenerateZephyraBolt(bolt, time));
+  }
+  zephyraStormRuntime.lightningBolts.forEach((bolt, index) => {
+    const visible = flash > 0.02 && (index === 0 || Math.sin(time * 11 + bolt.phase) > 0.15);
+    bolt.line.visible = visible;
+    bolt.glow.visible = visible;
+    bolt.line.material.opacity = THREE.MathUtils.clamp(0.28 + flash * 0.72, 0, 1);
+    bolt.glow.material.opacity = THREE.MathUtils.clamp(0.22 + flash * 0.78, 0, 1);
+  });
+  zephyraStormRuntime.stormLight.intensity = Math.min(24, flash * 16);
+  zephyraStormRuntime.crystalMaterial.emissiveIntensity = 0.82 + Math.sin(time * 2.4) * 0.2 + flash * 1.8;
+  zephyraStormRuntime.pathMaterial.emissiveIntensity = 1.25 + Math.sin(time * 3.3) * 0.28 + flash;
+  zephyraStormRuntime.shardMaterial.emissiveIntensity = 1.2 + Math.sin(time * 2.9) * 0.35 + flash * 1.4;
+  zephyraStormRuntime.floatingShards.forEach((shard) => {
+    shard.mesh.position.copy(surfacePositionForWorld('zephyra', shard.normal, shard.altitude + Math.sin(time * 1.15 + shard.phase) * 0.38));
+    shard.mesh.rotation.x += dt * shard.spin * 0.68;
+    shard.mesh.rotation.y += dt * shard.spin;
+  });
+
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('zephyra', activePlayerNormal, ZEPHYRA_SPIRE_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 6, 18);
+    if (!zephyraSpireDiscovered && distance < 9) {
+      zephyraSpireDiscovered = true;
+      showBanner('RESONANCE SPIRES DISCOVERED · ELECTRIC FIELD ACTIVE');
+    }
+  }
+  zephyraStormProximity = THREE.MathUtils.damp(zephyraStormProximity, targetProximity, 5, dt);
+  zephyraStormRuntime.landmarkLabel.material.opacity = 0.58 + Math.sin(time * 1.7) * 0.12 + zephyraStormProximity * 0.22;
+}
+
+function buildZephyraIonCanyon() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · Ion Glass Canyon';
+  scene.add(group);
+
+  const glassMaterial = new THREE.MeshStandardMaterial({
+    color: 0x24465d,
+    emissive: 0x1e8f9b,
+    emissiveIntensity: 1.15,
+    metalness: 0.62,
+    roughness: 0.18,
+    flatShading: true,
+  });
+  const shardCount = isTouchDevice ? 32 : 58;
+  const shards = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), glassMaterial, shardCount);
+  shards.name = 'Ion-glass canyon rim outcrops';
+  const dummy = new THREE.Object3D();
+  const along = new THREE.Vector3();
+  const across = new THREE.Vector3();
+  const color = new THREE.Color();
+  let seed = 0x10c4a55;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  for (let index = 0; index < shardCount; index++) {
+    const sampleIndex = Math.min(
+      ZEPHYRA_CANYON_SAMPLES.length - 1,
+      Math.floor((index / Math.max(1, shardCount - 1)) * ZEPHYRA_CANYON_SAMPLES.length)
+    );
+    const normal = ZEPHYRA_CANYON_SAMPLES[sampleIndex];
+    const previous = ZEPHYRA_CANYON_SAMPLES[Math.max(0, sampleIndex - 1)];
+    const next = ZEPHYRA_CANYON_SAMPLES[Math.min(ZEPHYRA_CANYON_SAMPLES.length - 1, sampleIndex + 1)];
+    along.copy(next).sub(previous);
+    along.addScaledVector(normal, -along.dot(normal)).normalize();
+    across.copy(along).cross(normal).normalize();
+    const side = index % 2 === 0 ? -1 : 1;
+    const edgeNormal = stepWorldNormal(normal, across, side * (2.35 + random() * 0.72), ZEPHYRA_RADIUS);
+    const height = 0.42 + Math.pow(random(), 1.8) * 2.7;
+    dummy.position.copy(surfacePositionForWorld('zephyra', edgeNormal, height * 0.46));
+    dummy.quaternion.setFromUnitVectors(UP, edgeNormal);
+    dummy.rotateY(random() * Math.PI * 2);
+    dummy.rotateX((random() - 0.5) * 0.34);
+    dummy.scale.set(
+      0.16 + height * (0.09 + random() * 0.045),
+      height,
+      0.16 + height * (0.085 + random() * 0.05)
+    );
+    dummy.updateMatrix();
+    shards.setMatrixAt(index, dummy.matrix);
+    shards.setColorAt(index, color.setHSL(0.47 + random() * 0.08, 0.72, 0.38 + random() * 0.2));
+  }
+  shards.instanceMatrix.needsUpdate = true;
+  if (shards.instanceColor) shards.instanceColor.needsUpdate = true;
+  group.add(shards);
+
+  const seamPositions = new Float32Array(ZEPHYRA_CANYON_SAMPLES.length * 3);
+  ZEPHYRA_CANYON_SAMPLES.forEach((normal, index) => {
+    const position = surfacePositionForWorld('zephyra', normal, 0.075);
+    seamPositions[index * 3] = position.x;
+    seamPositions[index * 3 + 1] = position.y;
+    seamPositions[index * 3 + 2] = position.z;
+  });
+  const seamGeometry = new THREE.BufferGeometry();
+  seamGeometry.setAttribute('position', new THREE.BufferAttribute(seamPositions, 3));
+  const seamMaterial = new THREE.LineBasicMaterial({
+    color: 0x80fff0,
+    transparent: true,
+    opacity: 0.38,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const energizedSeam = new THREE.Line(seamGeometry, seamMaterial);
+  energizedSeam.name = 'Energized canyon floor fracture';
+  group.add(energizedSeam);
+
+  const landmarkLabel = makeLabelSprite('ION GLASS CANYON', '#7ffff0');
+  landmarkLabel.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_CANYON_NORMAL, 6.2));
+  landmarkLabel.scale.set(5.2, 0.96, 1);
+  group.add(landmarkLabel);
+
+  return { group, shards, glassMaterial, energizedSeam, seamMaterial, landmarkLabel };
+}
+
+const zephyraCanyonRuntime = buildZephyraIonCanyon();
+
+function distanceToZephyraCanyon(normal) {
+  let closestDot = -1;
+  for (const sample of ZEPHYRA_CANYON_SAMPLES) closestDot = Math.max(closestDot, normal.dot(sample));
+  return Math.acos(THREE.MathUtils.clamp(closestDot, -1, 1)) * ZEPHYRA_RADIUS;
+}
+
+function updateZephyraIonCanyon(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = distanceToZephyraCanyon(activePlayerNormal);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 4.5, 13.5);
+    if (!zephyraCanyonDiscovered && distance < 7.2) {
+      zephyraCanyonDiscovered = true;
+      showBanner('ION GLASS CANYON DISCOVERED · FRACTURE CURRENT DETECTED');
+    }
+  }
+  zephyraCanyonProximity = THREE.MathUtils.damp(zephyraCanyonProximity, targetProximity, 5, dt);
+  const pulse = Math.sin(time * 3.6) * 0.5 + 0.5;
+  zephyraCanyonRuntime.glassMaterial.emissiveIntensity = 0.82 + pulse * 0.72 + zephyraCanyonProximity * 0.55;
+  zephyraCanyonRuntime.seamMaterial.opacity = 0.18 + pulse * 0.24 + zephyraCanyonProximity * 0.22;
+  zephyraCanyonRuntime.landmarkLabel.material.opacity = 0.48 + Math.sin(time * 1.45) * 0.1 + zephyraCanyonProximity * 0.3;
+}
+
+function buildZephyraFluxWell() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · Flux Well magnetic anomaly';
+  group.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_FLUX_NORMAL, 0.08));
+  group.quaternion.setFromUnitVectors(UP, ZEPHYRA_FLUX_NORMAL);
+  scene.add(group);
+
+  const coreMaterial = new THREE.MeshStandardMaterial({
+    color: 0x090814,
+    emissive: 0x371582,
+    emissiveIntensity: 1.15,
+    metalness: 0.96,
+    roughness: 0.14,
+  });
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.05, 24, 16), coreMaterial);
+  core.scale.y = 0.42;
+  core.position.y = 0.32;
+  group.add(core);
+
+  const groundRingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3b2870,
+    emissive: 0x7a3cff,
+    emissiveIntensity: 1.6,
+    metalness: 0.54,
+    roughness: 0.22,
+  });
+  const groundRings = [];
+  [1.48, 2.28, 3.18].forEach((radius, index) => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.075 - index * 0.012, 7, 56), groundRingMaterial);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.08 + index * 0.025;
+    group.add(ring);
+    groundRings.push(ring);
+  });
+
+  const fieldMaterial = new THREE.MeshBasicMaterial({
+    color: 0xa77aff,
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const fieldRings = [];
+  for (let index = 0; index < 4; index++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(3.65 + index * 0.48, 0.035, 5, 72), fieldMaterial.clone());
+    ring.position.y = 2.8;
+    ring.rotation.set(index * 0.72 + 0.24, index * 0.91, index * 0.43);
+    group.add(ring);
+    fieldRings.push(ring);
+  }
+
+  const debrisMaterial = new THREE.MeshStandardMaterial({
+    color: 0x302b45,
+    emissive: 0x4a2387,
+    emissiveIntensity: 0.42,
+    metalness: 0.72,
+    roughness: 0.38,
+    flatShading: true,
+  });
+  const debris = [];
+  let seed = 0xf10a7e;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let index = 0; index < (isTouchDevice ? 8 : 14); index++) {
+    const radius = 1.85 + random() * 3.2;
+    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18 + random() * 0.38, 0), debrisMaterial);
+    rock.scale.set(0.62 + random() * 1.1, 0.72 + random() * 1.5, 0.64 + random() * 1.15);
+    group.add(rock);
+    debris.push({
+      mesh: rock,
+      radius,
+      altitude: 1.2 + random() * 3.9,
+      phase: random() * Math.PI * 2,
+      speed: (0.22 + random() * 0.42) * (index % 2 ? 1 : -1),
+      spin: 0.35 + random() * 1.1,
+    });
+  }
+
+  const fluxLight = new THREE.PointLight(0x9a62ff, 7.5, 19, 2);
+  fluxLight.position.y = 2.4;
+  group.add(fluxLight);
+  const landmarkLabel = makeLabelSprite('FLUX WELL · MAGNETIC ANOMALY', '#c6a8ff');
+  landmarkLabel.position.set(0, 7.4, 0);
+  landmarkLabel.scale.set(6.2, 1.02, 1);
+  group.add(landmarkLabel);
+
+  return { group, core, coreMaterial, groundRings, groundRingMaterial, fieldRings, debris, debrisMaterial, fluxLight, landmarkLabel };
+}
+
+const zephyraFluxRuntime = buildZephyraFluxWell();
+
+function updateZephyraFluxWell(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('zephyra', activePlayerNormal, ZEPHYRA_FLUX_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 4.2, 15.5);
+    if (!zephyraFluxDiscovered && distance < 8.4) {
+      zephyraFluxDiscovered = true;
+      showBanner('FLUX WELL DISCOVERED · MAGNETIC GRAVITY DISTORTION');
+    }
+  }
+  zephyraFluxProximity = THREE.MathUtils.damp(zephyraFluxProximity, targetProximity, 5, dt);
+  const pulse = Math.sin(time * 2.6) * 0.5 + 0.5;
+  zephyraFluxRuntime.core.scale.y = 0.38 + pulse * 0.1;
+  zephyraFluxRuntime.core.rotation.y -= dt * 0.9;
+  zephyraFluxRuntime.coreMaterial.emissiveIntensity = 0.85 + pulse * 0.75 + zephyraFluxProximity * 0.6;
+  zephyraFluxRuntime.groundRingMaterial.emissiveIntensity = 1.15 + pulse * 0.8 + zephyraFluxProximity * 0.55;
+  zephyraFluxRuntime.groundRings.forEach((ring, index) => {
+    const scale = 1 + Math.sin(time * (1.65 + index * 0.19) + index * 1.8) * 0.035;
+    ring.scale.setScalar(scale);
+    ring.rotation.z += dt * (index % 2 ? -0.12 : 0.16);
+  });
+  zephyraFluxRuntime.fieldRings.forEach((ring, index) => {
+    ring.rotation.y += dt * (0.2 + index * 0.075) * (index % 2 ? -1 : 1);
+    ring.rotation.z += dt * (0.08 + index * 0.03);
+    ring.material.opacity = 0.1 + pulse * 0.12 + zephyraFluxProximity * 0.16;
+  });
+  zephyraFluxRuntime.debris.forEach((debris) => {
+    const angle = debris.phase + time * debris.speed;
+    debris.mesh.position.set(
+      Math.cos(angle) * debris.radius,
+      debris.altitude + Math.sin(angle * 1.7 + time * 0.68) * 0.42,
+      Math.sin(angle) * debris.radius
+    );
+    debris.mesh.rotation.x += dt * debris.spin;
+    debris.mesh.rotation.y -= dt * debris.spin * 0.72;
+  });
+  zephyraFluxRuntime.fluxLight.intensity = 5.2 + pulse * 3.8 + zephyraFluxProximity * 2.6;
+  zephyraFluxRuntime.landmarkLabel.material.opacity = 0.5 + Math.sin(time * 1.35) * 0.1 + zephyraFluxProximity * 0.3;
+}
+
+function buildZephyraAuroralSquall() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · Ion Veil localized auroral squall';
+  group.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_AURORA_NORMAL, 0.08));
+  group.quaternion.setFromUnitVectors(UP, ZEPHYRA_AURORA_NORMAL);
+  scene.add(group);
+
+  const curtains = [];
+  const curtainCount = isTouchDevice ? 3 : 5;
+  for (let index = 0; index < curtainCount; index++) {
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uPhase: { value: index * 1.73 },
+        uIntensity: { value: 0.72 },
+      },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `
+        uniform float uTime;
+        uniform float uPhase;
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          vec3 p = position;
+          float envelope = sin(uv.y * 3.14159);
+          p.x += sin(uv.y * 8.0 + uTime * 0.72 + uPhase) * 0.7 * envelope;
+          p.z += sin(uv.y * 5.0 - uTime * 0.46 + uPhase * 1.8) * 0.34 * envelope;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uPhase;
+        uniform float uIntensity;
+        varying vec2 vUv;
+        void main() {
+          float edge = smoothstep(0.0, 0.18, vUv.x) * smoothstep(0.0, 0.18, 1.0 - vUv.x);
+          float foot = smoothstep(0.0, 0.1, vUv.y);
+          float crown = 1.0 - smoothstep(0.62, 1.0, vUv.y);
+          float folds = 0.54 + sin(vUv.x * 34.0 + vUv.y * 9.0 - uTime * 1.35 + uPhase) * 0.2;
+          float filaments = pow(0.5 + 0.5 * sin(vUv.x * 73.0 + uTime * 0.72 + uPhase * 2.0), 4.0);
+          vec3 cyan = vec3(0.18, 1.0, 0.82);
+          vec3 violet = vec3(0.62, 0.26, 1.0);
+          vec3 color = mix(cyan, violet, smoothstep(0.16, 0.86, vUv.x + sin(uTime * 0.3 + uPhase) * 0.16));
+          float alpha = (folds * 0.16 + filaments * 0.12) * edge * foot * crown * uIntensity;
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+    });
+    const curtain = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 15.5, 28, 20), material);
+    curtain.position.set((index - (curtainCount - 1) * 0.5) * 1.1, 8.1, (index % 2 ? -1 : 1) * (0.8 + index * 0.25));
+    curtain.rotation.y = -0.72 + index * (1.44 / Math.max(1, curtainCount - 1));
+    group.add(curtain);
+    curtains.push(curtain);
+  }
+
+  const dropCount = isTouchDevice ? 38 : 72;
+  const rainPositions = new Float32Array(dropCount * 2 * 3);
+  const rainSeeds = [];
+  let seed = 0x10a5c11;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let index = 0; index < dropCount; index++) {
+    rainSeeds.push({
+      x: (random() - 0.5) * 13,
+      z: (random() - 0.5) * 11,
+      phase: random(),
+      speed: 4.8 + random() * 7.2,
+      length: 0.3 + random() * 0.9,
+      sway: random() * Math.PI * 2,
+    });
+  }
+  const rainGeometry = new THREE.BufferGeometry();
+  rainGeometry.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+  const rainMaterial = new THREE.LineBasicMaterial({
+    color: 0x7fffe3,
+    transparent: true,
+    opacity: 0.46,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const electricRain = new THREE.LineSegments(rainGeometry, rainMaterial);
+  electricRain.name = 'Localized electric rain';
+  electricRain.frustumCulled = false;
+  group.add(electricRain);
+
+  const coronaMaterial = new THREE.MeshBasicMaterial({
+    color: 0x6fffe1,
+    transparent: true,
+    opacity: 0.24,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const groundCoronas = [];
+  [2.2, 4.1, 6.4].forEach((radius, index) => {
+    const corona = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.035 + index * 0.012, 5, 64), coronaMaterial.clone());
+    corona.rotation.x = Math.PI / 2;
+    corona.position.y = 0.1 + index * 0.025;
+    group.add(corona);
+    groundCoronas.push(corona);
+  });
+
+  const strikeGeometry = new THREE.BufferGeometry();
+  strikeGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(10 * 3), 3));
+  const strikeMaterial = new THREE.LineBasicMaterial({
+    color: 0xe8ffff,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const groundStrike = new THREE.Line(strikeGeometry, strikeMaterial);
+  groundStrike.visible = false;
+  group.add(groundStrike);
+
+  const squallLight = new THREE.PointLight(0x72ffe4, 4.5, 24, 2);
+  squallLight.position.set(0, 6.5, 0);
+  group.add(squallLight);
+  const landmarkLabel = makeLabelSprite('ION VEIL · AURORAL SQUALL', '#8fffe6');
+  landmarkLabel.position.set(0, 11.3, 0);
+  landmarkLabel.scale.set(6, 1.04, 1);
+  group.add(landmarkLabel);
+
+  return {
+    group,
+    curtains,
+    rainPositions,
+    rainSeeds,
+    electricRain,
+    rainMaterial,
+    groundCoronas,
+    groundStrike,
+    strikeMaterial,
+    squallLight,
+    landmarkLabel,
+  };
+}
+
+const zephyraAuroraRuntime = buildZephyraAuroralSquall();
+let zephyraAuroraStrikeFrame = -1;
+
+function regenerateZephyraAuroraStrike(time) {
+  const positions = zephyraAuroraRuntime.groundStrike.geometry.attributes.position;
+  const targetX = Math.sin(time * 2.7) * 3.8;
+  const targetZ = Math.cos(time * 1.9) * 3.2;
+  for (let index = 0; index < positions.count; index++) {
+    const progress = index / (positions.count - 1);
+    const jitter = Math.sin(progress * Math.PI);
+    positions.setXYZ(
+      index,
+      targetX + (Math.random() - 0.5) * jitter * 1.15,
+      15.2 * (1 - progress) + 0.12,
+      targetZ + (Math.random() - 0.5) * jitter * 1.15
+    );
+  }
+  positions.needsUpdate = true;
+}
+
+function updateZephyraAuroralSquall(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('zephyra', activePlayerNormal, ZEPHYRA_AURORA_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 5.6, 17.5);
+    if (!zephyraAuroraDiscovered && distance < 9.2) {
+      zephyraAuroraDiscovered = true;
+      showBanner('ION VEIL DISCOVERED · AURORAL PRECIPITATION ACTIVE');
+    }
+  }
+  zephyraAuroraProximity = THREE.MathUtils.damp(zephyraAuroraProximity, targetProximity, 4.5, dt);
+  const pulse = Math.sin(time * 1.8) * 0.5 + 0.5;
+  zephyraAuroraRuntime.curtains.forEach((curtain, index) => {
+    curtain.material.uniforms.uTime.value = time;
+    curtain.material.uniforms.uIntensity.value = 0.62 + pulse * 0.3 + zephyraAuroraProximity * 0.18;
+    curtain.position.x += Math.sin(time * 0.34 + index * 1.7) * dt * 0.08;
+  });
+  zephyraAuroraRuntime.rainSeeds.forEach((drop, index) => {
+    const cycle = (drop.phase + time * drop.speed / 15.5) % 1;
+    const y = 0.3 + (1 - cycle) * 15.5;
+    const x = drop.x + Math.sin(time * 1.1 + drop.sway) * 0.28;
+    const z = drop.z + Math.sin(time * 0.73 + drop.sway * 1.4) * 0.22;
+    const offset = index * 6;
+    zephyraAuroraRuntime.rainPositions[offset] = x;
+    zephyraAuroraRuntime.rainPositions[offset + 1] = y;
+    zephyraAuroraRuntime.rainPositions[offset + 2] = z;
+    zephyraAuroraRuntime.rainPositions[offset + 3] = x + 0.05;
+    zephyraAuroraRuntime.rainPositions[offset + 4] = y + drop.length;
+    zephyraAuroraRuntime.rainPositions[offset + 5] = z - 0.04;
+  });
+  zephyraAuroraRuntime.electricRain.geometry.attributes.position.needsUpdate = true;
+  zephyraAuroraRuntime.rainMaterial.opacity = 0.28 + pulse * 0.24 + zephyraAuroraProximity * 0.12;
+  zephyraAuroraRuntime.groundCoronas.forEach((corona, index) => {
+    const wave = 1 + Math.sin(time * (1.7 + index * 0.22) + index * 2.1) * 0.06;
+    corona.scale.setScalar(wave);
+    corona.material.opacity = 0.065 + pulse * 0.085 + zephyraAuroraProximity * 0.07;
+    corona.rotation.z += dt * (index % 2 ? -0.08 : 0.11);
+  });
+
+  const flashWave = Math.sin(time * 2.4) + Math.sin(time * 7.1) * 0.58;
+  const flash = Math.pow(Math.max(0, flashWave - 1.16), 2);
+  const strikeFrame = Math.floor(time * 10);
+  if (flash > 0.015 && strikeFrame !== zephyraAuroraStrikeFrame) {
+    zephyraAuroraStrikeFrame = strikeFrame;
+    regenerateZephyraAuroraStrike(time);
+  }
+  zephyraAuroraRuntime.groundStrike.visible = flash > 0.018;
+  zephyraAuroraRuntime.strikeMaterial.opacity = THREE.MathUtils.clamp(0.28 + flash * 1.8, 0, 1);
+  zephyraAuroraRuntime.squallLight.intensity = 1.6 + pulse * 1.4 + flash * 14 + zephyraAuroraProximity * 0.8;
+  zephyraAuroraRuntime.landmarkLabel.material.opacity = 0.48 + Math.sin(time * 1.05) * 0.08 + zephyraAuroraProximity * 0.32;
+}
+
+function buildZephyraPiezoelectricGrove() {
+  const group = new THREE.Group();
+  group.name = 'Zephyra · Piezoelectric Prism Grove';
+  scene.add(group);
+
+  let seed = 0x6f726f76;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const stemMaterial = new THREE.MeshStandardMaterial({
+    color: 0x183340,
+    emissive: 0x13576b,
+    emissiveIntensity: 0.72,
+    metalness: 0.58,
+    roughness: 0.28,
+    flatShading: true,
+  });
+  const crownMaterials = [
+    new THREE.MeshStandardMaterial({
+      color: 0x74ffe3,
+      emissive: 0x2ce5c7,
+      emissiveIntensity: 1.28,
+      metalness: 0.32,
+      roughness: 0.18,
+      flatShading: true,
+    }),
+    new THREE.MeshStandardMaterial({
+      color: 0xc18aff,
+      emissive: 0x824cff,
+      emissiveIntensity: 1.22,
+      metalness: 0.38,
+      roughness: 0.2,
+      flatShading: true,
+    }),
+  ];
+  const basaltMaterial = new THREE.MeshStandardMaterial({
+    color: 0x111822,
+    emissive: 0x152438,
+    emissiveIntensity: 0.25,
+    metalness: 0.42,
+    roughness: 0.68,
+    flatShading: true,
+  });
+  const ringBaseMaterial = new THREE.MeshBasicMaterial({
+    color: 0x79ffe5,
+    transparent: true,
+    opacity: 0.08,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const stemGeometry = new THREE.ConeGeometry(0.28, 1, 6);
+  const branchGeometry = new THREE.ConeGeometry(0.16, 1, 5);
+  const crownGeometry = new THREE.DodecahedronGeometry(1, 0);
+  const basaltGeometry = new THREE.CylinderGeometry(0.68, 1.02, 0.34, 7);
+  const rootRingGeometry = new THREE.TorusGeometry(0.92, 0.035, 5, 32);
+  const trees = [];
+  const treeNormals = [];
+  const groveTangent = tangentHeadingForNormal(ZEPHYRA_GROVE_NORMAL);
+  const treeCount = isTouchDevice ? 10 : 17;
+
+  for (let index = 0; index < treeCount; index++) {
+    const angle = index * 2.39996 + random() * 0.32;
+    const radius = index === 0 ? 0 : 1.25 + Math.sqrt(index / treeCount) * 5.2 + random() * 0.72;
+    const direction = groveTangent.clone().applyAxisAngle(ZEPHYRA_GROVE_NORMAL, angle);
+    const normal = stepWorldNormal(ZEPHYRA_GROVE_NORMAL, direction, radius, ZEPHYRA_RADIUS);
+    const tree = new THREE.Group();
+    tree.position.copy(surfacePositionForWorld('zephyra', normal, 0.04));
+    tree.quaternion.setFromUnitVectors(UP, normal);
+    group.add(tree);
+
+    const base = new THREE.Mesh(basaltGeometry, basaltMaterial);
+    base.position.y = 0.12;
+    base.scale.set(0.72 + random() * 0.55, 0.72 + random() * 0.42, 0.72 + random() * 0.55);
+    base.rotation.y = random() * Math.PI;
+    tree.add(base);
+
+    const height = 2.2 + Math.pow(random(), 0.72) * 3.9;
+    const stem = new THREE.Mesh(stemGeometry, stemMaterial);
+    stem.position.y = height * 0.48;
+    stem.scale.set(0.62 + height * 0.085, height, 0.62 + height * 0.085);
+    stem.rotation.y = random() * Math.PI;
+    tree.add(stem);
+
+    const crystalCluster = new THREE.Group();
+    crystalCluster.position.y = height * 0.72;
+    tree.add(crystalCluster);
+    for (let branchIndex = 0; branchIndex < 3; branchIndex++) {
+      const branch = new THREE.Mesh(branchGeometry, crownMaterials[(index + branchIndex) % 2]);
+      const side = branchIndex - 1;
+      branch.position.set(side * 0.3, branchIndex * 0.34, (branchIndex % 2 ? -1 : 1) * 0.14);
+      branch.scale.set(0.72, 1.35 + random() * 0.7, 0.72);
+      branch.rotation.z = side * -0.72;
+      branch.rotation.x = (random() - 0.5) * 0.38;
+      crystalCluster.add(branch);
+    }
+
+    const crown = new THREE.Mesh(crownGeometry, crownMaterials[index % 2]);
+    crown.position.y = height + 0.5;
+    const crownScale = new THREE.Vector3(0.58 + random() * 0.32, 0.82 + random() * 0.52, 0.58 + random() * 0.34);
+    crown.scale.copy(crownScale);
+    crown.rotation.set(random() * 0.28, random() * Math.PI, random() * 0.25);
+    tree.add(crown);
+
+    const ringMaterial = ringBaseMaterial.clone();
+    ringMaterial.color.set(index % 2 ? 0xc79aff : 0x75ffe4);
+    const rootRing = new THREE.Mesh(rootRingGeometry, ringMaterial);
+    rootRing.position.y = 0.08;
+    rootRing.rotation.x = Math.PI / 2;
+    rootRing.scale.setScalar(0.72 + random() * 0.62);
+    tree.add(rootRing);
+
+    trees.push({ tree, crown, crownScale, crystalCluster, rootRing, distance: radius, phase: random() * Math.PI * 2 });
+    treeNormals.push(normal);
+  }
+
+  const veinPositions = [];
+  treeNormals.slice(1).forEach((normal) => {
+    let previous = surfacePositionForWorld('zephyra', ZEPHYRA_GROVE_NORMAL, 0.075);
+    for (let sample = 1; sample <= 5; sample++) {
+      const sampleNormal = slerpNormals(ZEPHYRA_GROVE_NORMAL, normal, sample / 5);
+      const next = surfacePositionForWorld('zephyra', sampleNormal, 0.075);
+      veinPositions.push(previous.x, previous.y, previous.z, next.x, next.y, next.z);
+      previous = next;
+    }
+  });
+  const veinGeometry = new THREE.BufferGeometry();
+  veinGeometry.setAttribute('position', new THREE.Float32BufferAttribute(veinPositions, 3));
+  const veinMaterial = new THREE.LineBasicMaterial({
+    color: 0x73ffe4,
+    transparent: true,
+    opacity: 0.24,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const rootVeins = new THREE.LineSegments(veinGeometry, veinMaterial);
+  rootVeins.name = 'Piezoelectric subsurface root network';
+  group.add(rootVeins);
+
+  const pulseRoot = new THREE.Group();
+  pulseRoot.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_GROVE_NORMAL, 0.08));
+  pulseRoot.quaternion.setFromUnitVectors(UP, ZEPHYRA_GROVE_NORMAL);
+  group.add(pulseRoot);
+  const resonanceRings = [];
+  for (let index = 0; index < 3; index++) {
+    const material = ringBaseMaterial.clone();
+    material.color.set(index % 2 ? 0xbd8cff : 0x65ffe1);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.055, 5, 48), material);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.05;
+    pulseRoot.add(ring);
+    resonanceRings.push(ring);
+  }
+
+  const particleCount = isTouchDevice ? 26 : 52;
+  const particlePositions = new Float32Array(particleCount * 3);
+  for (let index = 0; index < particleCount; index++) {
+    const angle = random() * Math.PI * 2;
+    const radius = 0.8 + random() * 6.2;
+    particlePositions[index * 3] = Math.cos(angle) * radius;
+    particlePositions[index * 3 + 1] = 0.5 + random() * 6.6;
+    particlePositions[index * 3 + 2] = Math.sin(angle) * radius;
+  }
+  const particleGeometry = new THREE.BufferGeometry();
+  particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+  const particleMaterial = new THREE.PointsMaterial({
+    color: 0x9ffff0,
+    size: 0.13,
+    transparent: true,
+    opacity: 0.48,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const chargeParticles = new THREE.Points(particleGeometry, particleMaterial);
+  pulseRoot.add(chargeParticles);
+
+  const groveLight = new THREE.PointLight(0x68ffe2, 4.5, 22, 2);
+  groveLight.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_GROVE_NORMAL, 4.4));
+  group.add(groveLight);
+  const landmarkLabel = makeLabelSprite('PRISM GROVE · PIEZOELECTRIC FOREST', '#93ffe9');
+  landmarkLabel.position.copy(surfacePositionForWorld('zephyra', ZEPHYRA_GROVE_NORMAL, 8.2));
+  landmarkLabel.scale.set(6.4, 1.02, 1);
+  group.add(landmarkLabel);
+
+  return {
+    group,
+    trees,
+    stemMaterial,
+    crownMaterials,
+    veinMaterial,
+    resonanceRings,
+    chargeParticles,
+    particleMaterial,
+    groveLight,
+    landmarkLabel,
+  };
+}
+
+const zephyraGroveRuntime = buildZephyraPiezoelectricGrove();
+
+function updateZephyraPiezoelectricGrove(dt, time, activePlayerNormal) {
+  let targetProximity = 0;
+  if (activePlayerNormal) {
+    const distance = arcDistanceForWorld('zephyra', activePlayerNormal, ZEPHYRA_GROVE_NORMAL);
+    targetProximity = 1 - THREE.MathUtils.smoothstep(distance, 4.8, 15.2);
+    if (!zephyraGroveDiscovered && distance < 8.2) {
+      zephyraGroveDiscovered = true;
+      showBanner('PRISM GROVE DISCOVERED · ROOT NETWORK RESONATING');
+    }
+  }
+  zephyraGroveProximity = THREE.MathUtils.damp(zephyraGroveProximity, targetProximity, 4.8, dt);
+  zephyraGroveArrivalCharge = Math.max(0, zephyraGroveArrivalCharge - dt * 0.055);
+  const activation = Math.max(zephyraGroveProximity, zephyraGroveArrivalCharge);
+  const breathingPulse = Math.sin(time * 2.15) * 0.5 + 0.5;
+
+  zephyraGroveRuntime.stemMaterial.emissiveIntensity = 0.48 + breathingPulse * 0.25 + activation * 0.65;
+  zephyraGroveRuntime.crownMaterials.forEach((material, index) => {
+    material.emissiveIntensity = 0.92 + breathingPulse * 0.42 + activation * (0.75 + index * 0.12);
+  });
+  zephyraGroveRuntime.trees.forEach((tree, index) => {
+    const wave = Math.max(0, Math.sin(time * 3.15 - tree.distance * 1.45 + tree.phase * 0.18));
+    const response = activation * wave;
+    tree.crown.scale.copy(tree.crownScale).multiplyScalar(1 + response * 0.16);
+    tree.crown.rotation.y += dt * (0.12 + response * 0.46) * (index % 2 ? -1 : 1);
+    tree.crystalCluster.rotation.y = Math.sin(time * 0.82 + tree.phase) * (0.035 + activation * 0.045);
+    tree.rootRing.material.opacity = 0.035 + breathingPulse * 0.025 + response * 0.38;
+    tree.rootRing.scale.setScalar((0.78 + tree.distance * 0.025) * (1 + response * 0.12));
+  });
+  zephyraGroveRuntime.veinMaterial.opacity = 0.12 + breathingPulse * 0.1 + activation * 0.32;
+  zephyraGroveRuntime.resonanceRings.forEach((ring, index) => {
+    const cycle = (time * (0.17 + activation * 0.22) + index / zephyraGroveRuntime.resonanceRings.length) % 1;
+    ring.scale.setScalar(0.8 + cycle * 5.5);
+    ring.material.opacity = (1 - cycle) * (0.035 + activation * 0.28);
+  });
+  zephyraGroveRuntime.chargeParticles.rotation.y += dt * (0.08 + activation * 0.3);
+  zephyraGroveRuntime.chargeParticles.position.y = Math.sin(time * 0.72) * 0.22;
+  zephyraGroveRuntime.particleMaterial.opacity = 0.24 + breathingPulse * 0.16 + activation * 0.28;
+  zephyraGroveRuntime.groveLight.intensity = 2.4 + breathingPulse * 2.2 + activation * 5.8;
+  zephyraGroveRuntime.landmarkLabel.material.opacity = 0.48 + Math.sin(time * 1.25) * 0.08 + activation * 0.34;
+}
+
+function makeCommandScreenTexture(screenIndex) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 288;
+  const ctx = canvas.getContext('2d');
+  const palettes = [
+    { accent: '#63e8ff', label: 'LUNA OPS', status: 'HABITAT NOMINAL' },
+    { accent: '#ff9a62', label: 'MARS LINK', status: 'UPLINK 98.7%' },
+    { accent: '#9dffab', label: 'LIFE SUPPORT', status: 'O₂ 21.4%' },
+  ];
+  const palette = palettes[screenIndex % palettes.length];
+  ctx.fillStyle = '#020a12';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(104, 221, 255, 0.12)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= canvas.width; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += 32) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
+  ctx.fillStyle = palette.accent;
+  ctx.font = '700 28px monospace';
+  ctx.fillText(palette.label, 24, 42);
+  ctx.font = '600 16px monospace';
+  ctx.fillText(palette.status, 24, 70);
+  ctx.strokeStyle = palette.accent;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  for (let x = 24; x < 488; x += 12) {
+    const y = 188 + Math.sin(x * 0.034 + screenIndex * 1.7) * 34 + Math.cos(x * 0.081) * 13;
+    if (x === 24) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  for (let i = 0; i < 6; i++) {
+    ctx.fillStyle = i % 2 === 0 ? palette.accent : 'rgba(255,255,255,0.28)';
+    ctx.fillRect(24 + i * 78, 235, 54, 10 + ((i * 19 + screenIndex * 11) % 30));
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function buildMoonCommandPath() {
+  const markerCount = 9;
+  const geometry = new THREE.CylinderGeometry(0.34, 0.34, 0.075, 12);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x8fe8ff,
+    emissive: 0x3bd7ff,
+    emissiveIntensity: 1.25,
+    roughness: 0.35,
+  });
+  const markers = new THREE.InstancedMesh(geometry, material, markerCount);
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < markerCount; i++) {
+    const normal = slerpNormals(MOON_PAD_NORMAL, MOON_COMMAND_NORMAL, (i + 1) / (markerCount + 1));
+    dummy.position.copy(MOON_CENTER).addScaledVector(normal, MOON_RADIUS + getMoonHeight(normal) + 0.11);
+    dummy.quaternion.setFromUnitVectors(UP, normal);
+    dummy.updateMatrix();
+    markers.setMatrixAt(i, dummy.matrix);
+  }
+  markers.instanceMatrix.needsUpdate = true;
+  scene.add(markers);
+}
+
+function buildMoonCommandCenter() {
+  const group = new THREE.Group();
+  group.name = 'Luna Command Center · walk-in habitat';
+  group.position.copy(MOON_COMMAND_POSITION);
+  group.quaternion.copy(surfaceVehicleQuaternion(MOON_COMMAND_NORMAL, MOON_COMMAND_HEADING));
+  scene.add(group);
+
+  const shell = stdMat(0xb7c4ce, { metalness: 0.68, roughness: 0.36 });
+  const darkShell = stdMat(0x19222e, { metalness: 0.52, roughness: 0.5 });
+  const consoleMaterial = stdMat(0x101927, { metalness: 0.74, roughness: 0.3 });
+  const doorAccent = new THREE.MeshStandardMaterial({
+    color: 0xff8654,
+    emissive: 0xff4a1f,
+    emissiveIntensity: 1.35,
+    metalness: 0.34,
+    roughness: 0.32,
+  });
+
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(10.2, 0.34, 10.2), darkShell);
+  floor.position.y = 0.17;
+  group.add(floor);
+  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.38, 5.45, 10.2), shell);
+  leftWall.position.set(-4.92, 2.85, 0);
+  group.add(leftWall);
+  const rightWall = leftWall.clone();
+  rightWall.position.x = 4.92;
+  group.add(rightWall);
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(10.2, 5.45, 0.38), shell);
+  backWall.position.set(0, 2.85, 4.92);
+  group.add(backWall);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(10.4, 0.42, 10.4), shell);
+  roof.position.y = 5.56;
+  group.add(roof);
+
+  [-4.05, 4.05].forEach((x) => {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.72, 5.25, 0.52), shell);
+    pillar.position.set(x, 2.72, -4.92);
+    group.add(pillar);
+  });
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.56, 0.54), shell);
+  lintel.position.set(0, 5.14, -4.92);
+  group.add(lintel);
+  const doorRing = new THREE.Mesh(new THREE.TorusGeometry(3.05, 0.13, 8, 32, Math.PI), doorAccent);
+  doorRing.position.set(0, 0.36, -5.2);
+  group.add(doorRing);
+
+  const commandLabel = makeLabelSprite('LUNA COMMAND', '#8fe8ff');
+  commandLabel.position.set(0, 6.55, -5.35);
+  commandLabel.scale.set(4.8, 0.92, 1);
+  group.add(commandLabel);
+
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(8.55, 1.32, 1.35), consoleMaterial);
+  desk.position.set(0, 0.94, 3.6);
+  group.add(desk);
+  const controlDeck = new THREE.Mesh(new THREE.BoxGeometry(8.65, 0.18, 1.7), darkShell);
+  controlDeck.position.set(0, 1.68, 3.18);
+  controlDeck.rotation.x = -0.16;
+  group.add(controlDeck);
+
+  const screenMaterials = [];
+  [-2.65, 0, 2.65].forEach((x, screenIndex) => {
+    const screenMaterial = new THREE.MeshBasicMaterial({
+      map: makeCommandScreenTexture(screenIndex),
+      toneMapped: false,
+      transparent: true,
+      opacity: 1,
+      side: THREE.FrontSide,
+    });
+    screenMaterials.push(screenMaterial);
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(2.38, 1.58, 0.18), consoleMaterial);
+    bezel.position.set(x, 3.65, 4.62);
+    group.add(bezel);
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.14, 1.34), screenMaterial);
+    screen.position.set(x, 3.65, 4.515);
+    screen.rotation.y = Math.PI;
+    group.add(screen);
+  });
+
+  const buttonMaterials = [0x60dcff, 0xff6b3c, 0xa6ff82].map((color) => new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 1.65,
+    roughness: 0.25,
+  }));
+  for (let row = 0; row < 3; row++) {
+    for (let column = 0; column < 12; column++) {
+      const button = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.13, 0.3), buttonMaterials[(row + column) % buttonMaterials.length]);
+      button.position.set(-3.7 + column * 0.67, 1.86 + row * 0.015, 2.72 + row * 0.38);
+      group.add(button);
+    }
+  }
+
+  [-3.92, 3.92].forEach((x, sideIndex) => {
+    const sideConsole = new THREE.Mesh(new THREE.BoxGeometry(1.08, 1.42, 4.35), consoleMaterial);
+    sideConsole.position.set(x, 0.9, 0.65);
+    group.add(sideConsole);
+    for (let z = -0.9; z <= 2.1; z += 1) {
+      const statusLight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.28, 0.44), buttonMaterials[(sideIndex + Math.round(z + 1)) % buttonMaterials.length]);
+      statusLight.position.set(x + (sideIndex === 0 ? 0.56 : -0.56), 1.25, z);
+      group.add(statusLight);
+    }
+  });
+
+  const holoBase = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.38, 1.05, 16), consoleMaterial);
+  holoBase.position.set(0, 0.67, 0.2);
+  group.add(holoBase);
+  const hologramMaterial = new THREE.MeshBasicMaterial({
+    color: 0x5ce8ff,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.58,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const hologram = new THREE.Mesh(new THREE.IcosahedronGeometry(0.86, 2), hologramMaterial);
+  hologram.position.set(0, 2.05, 0.2);
+  group.add(hologram);
+  const orbitRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.22, 0.025, 6, 48),
+    new THREE.MeshBasicMaterial({ color: 0xff9a62, transparent: true, opacity: 0.72, toneMapped: false })
+  );
+  orbitRing.position.copy(hologram.position);
+  orbitRing.rotation.x = Math.PI / 2.5;
+  group.add(orbitRing);
+
+  [-2.25, 2.25].forEach((x) => {
+    const chair = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.2, 1.05), darkShell);
+    seat.position.y = 1.02;
+    chair.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.25, 0.18), darkShell);
+    back.position.set(0, 1.52, -0.45);
+    chair.add(back);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.9, 8), consoleMaterial);
+    stem.position.y = 0.48;
+    chair.add(stem);
+    chair.position.set(x, 0, 1.65);
+    chair.rotation.y = Math.PI;
+    group.add(chair);
+  });
+
+  const interiorLight = new THREE.PointLight(0x70dfff, 2.25, 14, 2);
+  interiorLight.position.set(0, 4.6, 0.7);
+  group.add(interiorLight);
+  const doorLight = new THREE.PointLight(0xff7044, 1.2, 9, 2);
+  doorLight.position.set(0, 3.8, -4.35);
+  group.add(doorLight);
+
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.2, 8), darkShell);
+  antenna.position.set(3.3, 7.25, 1.4);
+  group.add(antenna);
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 8), doorAccent);
+  beacon.position.set(3.3, 8.9, 1.4);
+  group.add(beacon);
+
+  return {
+    group,
+    screenMaterials,
+    buttonMaterials,
+    hologram,
+    hologramMaterial,
+    orbitRing,
+    interiorLight,
+    beacon,
+  };
+}
+
+buildMoonCommandPath();
+const moonCommandRuntime = buildMoonCommandCenter();
+const moonCommandDeltaNormal = new THREE.Vector3();
+
+function isNearMoonCommand(normal, radius = MOON_COMMAND_INTERACT_RADIUS) {
+  return arcDistanceForWorld('moon', normal, MOON_COMMAND_NORMAL) < radius;
+}
+
+function updateMoonCommandCenter(dt, time, listenerNormal) {
+  let targetInterior = 0;
+  if (listenerNormal) {
+    moonCommandDeltaNormal.copy(listenerNormal).sub(MOON_COMMAND_NORMAL);
+    const along = Math.abs(moonCommandDeltaNormal.dot(MOON_COMMAND_HEADING) * MOON_RADIUS);
+    const across = Math.abs(moonCommandDeltaNormal.dot(MOON_COMMAND_RIGHT) * MOON_RADIUS);
+    const depthInfluence = 1 - THREE.MathUtils.smoothstep(along, 4.35, 5.25);
+    const widthInfluence = 1 - THREE.MathUtils.smoothstep(across, 4.1, 5.05);
+    targetInterior = depthInfluence * widthInfluence;
+
+    if (!moonCommandDiscovered && arcDistanceForWorld('moon', listenerNormal, MOON_COMMAND_NORMAL) < 7.2) {
+      moonCommandDiscovered = true;
+      showBanner('LUNA COMMAND CENTER DISCOVERED · WALK INSIDE');
+    }
+  }
+  moonCommandInterior = THREE.MathUtils.damp(moonCommandInterior, targetInterior, 6, dt);
+
+  const systemLevel = moonCommandSystemsActive ? 1 : 0.16;
+  moonCommandRuntime.screenMaterials.forEach((material, index) => {
+    material.opacity = THREE.MathUtils.lerp(0.18, 0.92 + Math.sin(time * 2.3 + index) * 0.08, systemLevel);
+  });
+  moonCommandRuntime.buttonMaterials.forEach((material, index) => {
+    material.emissiveIntensity = 0.18 + systemLevel * (1.15 + Math.max(0, Math.sin(time * (3.2 + index) + index)) * 1.1);
+  });
+  moonCommandRuntime.hologram.rotation.y += dt * (moonCommandSystemsActive ? 0.72 : 0.12);
+  moonCommandRuntime.hologram.rotation.x = Math.sin(time * 0.7) * 0.16;
+  moonCommandRuntime.hologramMaterial.opacity = 0.08 + systemLevel * (0.42 + Math.sin(time * 2) * 0.08);
+  moonCommandRuntime.orbitRing.rotation.z += dt * (moonCommandSystemsActive ? 0.42 : 0.08);
+  moonCommandRuntime.interiorLight.intensity = 0.28 + systemLevel * (1.72 + Math.sin(time * 1.8) * 0.18);
+  moonCommandRuntime.beacon.material.emissiveIntensity = 0.5 + systemLevel * (1.1 + Math.sin(time * 4.2) * 0.35);
+}
 
 function buildMoonShuttle() {
   const shuttle = new THREE.Group();
@@ -1472,15 +5086,27 @@ let footJumpHeight = 0;
 let footVerticalVelocity = 0;
 let footGrounded = true;
 const FOOT_THRUSTER_FUEL_MAX = 3.2;
-const ROVER_THRUSTER_FUEL_MAX = 3.0;
+const ROVER_THRUSTER_FUEL_MAX = 5.5;
+const ROVER_HOVER_HEIGHT = 14;
+const ROVER_MAX_LIFT_ACCELERATION = 25.5;
+const ROVER_LIFT_SPOOL_UP = 5.8;
+const ROVER_LIFT_SPOOL_DOWN = 13;
 let footThrusterFuel = FOOT_THRUSTER_FUEL_MAX;
 let roverThrusterFuel = ROVER_THRUSTER_FUEL_MAX;
-let footThrusterBurstTime = 0;
-let roverThrusterBurstTime = 0;
+let footThrusterWasActive = false;
+let roverThrusterWasActive = false;
+let roverLiftSpool = 0;
 let shuttleLocation = 'mars';
 let shuttleTransit = null;
 let shuttleDisplaySpeed = 0;
 let shuttleDockTimer = SHUTTLE_DOCK_DURATION;
+const HYPERBIKE_BOARD_RADIUS = 5.8;
+const HYPERBIKE_TRAVEL_DURATION = 7.2;
+let hyperBikeLocation = 'moon';
+let hyperBikeTransit = null;
+let hyperBikeDisplaySpeed = 0;
+const zephyraFluxToward = new THREE.Vector3();
+const zephyraFluxAxis = new THREE.Vector3();
 
 /* ---------- procedural soundscape ---------- */
 
@@ -1494,13 +5120,17 @@ let engineFilter = null;
 let engineOscillator = null;
 let engineSubOscillator = null;
 let engineNoiseGain = null;
+let thrusterBusGain = null;
+let thrusterNoiseFilter = null;
+let thrusterToneOscillator = null;
+let thrusterSubOscillator = null;
 let audioEnabled = true;
 let audioStarted = false;
 
 function updateAudioIndicator() {
   audioToggleEl.classList.toggle('audio-live', audioStarted && audioEnabled);
   audioToggleEl.setAttribute('aria-pressed', String(audioEnabled));
-  audioStateEl.textContent = !audioStarted ? 'START' : audioEnabled ? 'ON' : 'OFF';
+  audioStateEl.textContent = !audioStarted ? 'TAP TO START' : audioEnabled ? 'ON' : 'OFF';
   audioToggleEl.setAttribute(
     'aria-label',
     !audioStarted ? 'Start Mars soundscape' : audioEnabled ? 'Mute Mars soundscape' : 'Enable Mars soundscape'
@@ -1520,62 +5150,91 @@ function createBrownNoiseBuffer(context, seconds = 5) {
   return buffer;
 }
 
+function createWhiteNoiseBuffer(context, seconds = 3) {
+  const frameCount = Math.floor(context.sampleRate * seconds);
+  const buffer = context.createBuffer(1, frameCount, context.sampleRate);
+  const samples = buffer.getChannelData(0);
+  for (let i = 0; i < frameCount; i++) samples[i] = Math.random() * 2 - 1;
+  return buffer;
+}
+
+function createChillHopBuffer(context) {
+  const bpm = 72;
+  const beatDuration = 60 / bpm;
+  const duration = beatDuration * 32;
+  const frameCount = Math.floor(context.sampleRate * duration);
+  const buffer = context.createBuffer(1, frameCount, context.sampleRate);
+  const samples = buffer.getChannelData(0);
+  const roots = [110, 98, 82.41, 92.5];
+  const melody = [2, 2.244, 2.52, 2.244, 2, 1.887, 1.682, 1.887, 2, 2.52, 2.244, 1.887, 1.682, 1.498, 1.682, 1.887];
+  let noiseSeed = 0x325a91;
+  let previousNoise = 0;
+
+  for (let i = 0; i < frameCount; i++) {
+    const time = i / context.sampleRate;
+    const beat = time / beatDuration;
+    const beatIndex = Math.floor(beat);
+    const beatFraction = beat - beatIndex;
+    const chordRoot = roots[Math.floor(beat / 4) % roots.length];
+    noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0;
+    const noise = (noiseSeed / 0xffffffff) * 2 - 1;
+    const highNoise = noise - previousNoise;
+    previousNoise = noise;
+
+    const padWobble = 0.82 + Math.sin(time * Math.PI * 0.34) * 0.08;
+    const chord = (
+      Math.sin(Math.PI * 2 * chordRoot * time) * 0.068
+      + Math.sin(Math.PI * 2 * chordRoot * 1.1892 * time) * 0.052
+      + Math.sin(Math.PI * 2 * chordRoot * 1.4983 * time) * 0.043
+      + Math.sin(Math.PI * 2 * chordRoot * 0.5 * time) * 0.035
+    ) * padWobble;
+
+    const stepIndex = Math.floor(beat * 2) % melody.length;
+    const stepPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
+    const melodyEnvelope = Math.exp(-stepPhase * 3.7) * (stepIndex % 4 === 3 ? 0.35 : 1);
+    const melodyTone = Math.sin(Math.PI * 2 * chordRoot * melody[stepIndex] * time) * melodyEnvelope * 0.034;
+
+    const kickPhase = beatFraction * beatDuration;
+    const kickActive = beatIndex % 4 === 0 || beatIndex % 4 === 2;
+    const kick = kickActive
+      ? Math.sin(Math.PI * 2 * (48 + Math.exp(-kickPhase * 18) * 42) * kickPhase) * Math.exp(-kickPhase * 13) * 0.2
+      : 0;
+
+    const snareActive = beatIndex % 4 === 1 || beatIndex % 4 === 3;
+    const snare = snareActive ? highNoise * Math.exp(-kickPhase * 18) * 0.055 : 0;
+    const halfBeatPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
+    const brushedHat = highNoise * Math.exp(-halfBeatPhase * 42) * 0.018;
+    const vinyl = noise * 0.0035;
+    samples[i] = THREE.MathUtils.clamp((chord + melodyTone + kick + snare + brushedHat + vinyl) * 0.82, -0.72, 0.72);
+  }
+  return buffer;
+}
+
 function buildSpeakerStationAudio(context, output) {
   const now = context.currentTime;
-  SPEAKER_STATIONS.forEach((station, stationIndex) => {
+  const stationInputs = [];
+  SPEAKER_STATIONS.forEach((station) => {
     const proximityGain = context.createGain();
     proximityGain.gain.setValueAtTime(0, now);
     proximityGain.connect(output);
-
     const panner = context.createStereoPanner ? context.createStereoPanner() : context.createGain();
     panner.connect(proximityGain);
-
-    const toneFilter = context.createBiquadFilter();
-    toneFilter.type = 'lowpass';
-    toneFilter.frequency.setValueAtTime(station.filter, now);
-    toneFilter.Q.setValueAtTime(2.1 + stationIndex * 0.18, now);
-
-    const dryGain = context.createGain();
-    dryGain.gain.setValueAtTime(0.72, now);
-    toneFilter.connect(dryGain).connect(panner);
-
-    const delay = context.createDelay(1.2);
-    const feedback = context.createGain();
-    const wetGain = context.createGain();
-    delay.delayTime.setValueAtTime(station.delay, now);
-    feedback.gain.setValueAtTime(0.2 + stationIndex * 0.012, now);
-    wetGain.gain.setValueAtTime(0.34, now);
-    toneFilter.connect(delay);
-    delay.connect(feedback).connect(delay);
-    delay.connect(wetGain).connect(panner);
-
-    const oscillators = station.notes.map((frequency, noteIndex) => {
-      const oscillator = context.createOscillator();
-      const noteGain = context.createGain();
-      oscillator.type = noteIndex === 2 && station.wave === 'sawtooth' ? 'triangle' : station.wave;
-      oscillator.frequency.setValueAtTime(frequency, now);
-      oscillator.detune.setValueAtTime((noteIndex - 1) * 4 + stationIndex * 1.5, now);
-      noteGain.gain.setValueAtTime([0.34, 0.21, 0.13][noteIndex], now);
-      oscillator.connect(noteGain).connect(toneFilter);
-      oscillator.start(now);
-      return oscillator;
-    });
-
-    const filterLfo = context.createOscillator();
-    const filterLfoGain = context.createGain();
-    filterLfo.type = 'sine';
-    filterLfo.frequency.setValueAtTime(station.lfo, now);
-    filterLfoGain.gain.setValueAtTime(station.sweep, now);
-    filterLfo.connect(filterLfoGain).connect(toneFilter.frequency);
-    filterLfo.start(now);
-
-    station.audio = {
-      proximityGain,
-      panner,
-      toneFilter,
-      oscillators,
-    };
+    stationInputs.push(panner);
+    station.audio = { proximityGain, panner };
   });
+
+  const chillSource = context.createBufferSource();
+  chillSource.buffer = createChillHopBuffer(context);
+  chillSource.loop = true;
+  const chillFilter = context.createBiquadFilter();
+  chillFilter.type = 'lowpass';
+  chillFilter.frequency.setValueAtTime(2400, now);
+  chillFilter.Q.setValueAtTime(0.55, now);
+  const chillLevel = context.createGain();
+  chillLevel.gain.setValueAtTime(1.05, now);
+  chillSource.connect(chillFilter).connect(chillLevel);
+  stationInputs.forEach((input) => chillLevel.connect(input));
+  chillSource.start(now);
 }
 
 function buildAudioSystem() {
@@ -1605,7 +5264,7 @@ function buildAudioSystem() {
   buildSpeakerStationAudio(audioContext, audioMasterGain);
 
   ambientBusGain = audioContext.createGain();
-  ambientBusGain.gain.setValueAtTime(0.035, now);
+  ambientBusGain.gain.setValueAtTime(0.052, now);
   ambientBusGain.connect(audioMasterGain);
 
   const droneFilter = audioContext.createBiquadFilter();
@@ -1677,24 +5336,57 @@ function buildAudioSystem() {
   engineNoiseGain.gain.setValueAtTime(0.075, now);
   noiseSource.connect(engineNoiseFilter).connect(engineNoiseGain).connect(engineFilter);
 
+  thrusterBusGain = audioContext.createGain();
+  thrusterBusGain.gain.setValueAtTime(0.0001, now);
+  thrusterBusGain.connect(audioMasterGain);
+  thrusterNoiseFilter = audioContext.createBiquadFilter();
+  thrusterNoiseFilter.type = 'bandpass';
+  thrusterNoiseFilter.frequency.setValueAtTime(420, now);
+  thrusterNoiseFilter.Q.setValueAtTime(0.88, now);
+  thrusterNoiseFilter.connect(thrusterBusGain);
+
+  const thrusterNoiseSource = audioContext.createBufferSource();
+  thrusterNoiseSource.buffer = createWhiteNoiseBuffer(audioContext);
+  thrusterNoiseSource.loop = true;
+  thrusterNoiseSource.connect(thrusterNoiseFilter);
+
+  thrusterToneOscillator = audioContext.createOscillator();
+  const thrusterToneGain = audioContext.createGain();
+  thrusterToneOscillator.type = 'triangle';
+  thrusterToneOscillator.frequency.setValueAtTime(48, now);
+  thrusterToneGain.gain.setValueAtTime(0.085, now);
+  thrusterToneOscillator.connect(thrusterToneGain).connect(thrusterBusGain);
+
+  thrusterSubOscillator = audioContext.createOscillator();
+  const thrusterSubGain = audioContext.createGain();
+  thrusterSubOscillator.type = 'sine';
+  thrusterSubOscillator.frequency.setValueAtTime(28, now);
+  thrusterSubGain.gain.setValueAtTime(0.26, now);
+  thrusterSubOscillator.connect(thrusterSubGain).connect(thrusterBusGain);
+
   droneA.start(now);
   droneB.start(now);
   ambienceLfo.start(now);
   noiseSource.start(now);
   engineOscillator.start(now);
   engineSubOscillator.start(now);
+  thrusterNoiseSource.start(now);
+  thrusterToneOscillator.start(now);
+  thrusterSubOscillator.start(now);
   return true;
 }
 
 async function ensureMarsAudio() {
   if (!audioEnabled || !buildAudioSystem()) return;
   try {
+    const wasStarted = audioStarted;
     if (audioContext.state !== 'running') await audioContext.resume();
     audioStarted = audioContext.state === 'running';
     const now = audioContext.currentTime;
     audioMasterGain.gain.cancelScheduledValues(now);
-    audioMasterGain.gain.setTargetAtTime(0.62, now, 0.28);
+    audioMasterGain.gain.setTargetAtTime(0.78, now, 0.22);
     updateAudioIndicator();
+    if (audioStarted && !wasStarted) showBanner('PA NETWORK ONLINE · MUSIC ACTIVE');
   } catch (error) {
     console.warn('Mars audio could not start:', error);
   }
@@ -1720,6 +5412,17 @@ function updateRoverAudio(speed, throttleInput) {
   engineNoiseGain.gain.setTargetAtTime(0.075 + speedRatio * 0.1, now, 0.15);
 }
 
+function updateThrusterAudio(active, isRover, pulse) {
+  if (!audioStarted || !audioEnabled || audioContext.state !== 'running' || !thrusterBusGain) return;
+  const now = audioContext.currentTime;
+  const pulseLevel = THREE.MathUtils.clamp(pulse, 0, 1);
+  const targetGain = active ? (isRover ? 0.04 : 0.029) * (0.58 + pulseLevel * 0.42) : 0.0001;
+  thrusterBusGain.gain.setTargetAtTime(targetGain, now, active ? 0.012 : 0.025);
+  thrusterNoiseFilter.frequency.setTargetAtTime((isRover ? 270 : 390) + pulseLevel * 240, now, 0.018);
+  thrusterToneOscillator.frequency.setTargetAtTime((isRover ? 42 : 54) + pulseLevel * 18, now, 0.018);
+  thrusterSubOscillator.frequency.setTargetAtTime((isRover ? 25 : 32) + pulseLevel * 11, now, 0.014);
+}
+
 const stationAudioTangent = new THREE.Vector3();
 const stationAudioRight = new THREE.Vector3();
 
@@ -1730,8 +5433,8 @@ function updateSpeakerStations(time, listenerNormal, listenerHeading) {
 
   SPEAKER_STATIONS.forEach((station, stationIndex) => {
     const distance = hasMarsListener ? geodesicDistance(listenerNormal, station.normal) : Infinity;
-    const proximity = 1 - THREE.MathUtils.smoothstep(distance, 3.2, station.hearingRadius);
-    const signal = Math.pow(THREE.MathUtils.clamp(proximity, 0, 1), 1.65);
+    const proximity = 1 - THREE.MathUtils.smoothstep(distance, 7.5, station.hearingRadius);
+    const signal = Math.pow(THREE.MathUtils.clamp(proximity, 0, 1), 1.45);
     strongestSignal = Math.max(strongestSignal, signal);
     station.proximity = proximity;
 
@@ -1752,7 +5455,7 @@ function updateSpeakerStations(time, listenerNormal, listenerHeading) {
 
     if (station.audio && audioStarted && audioEnabled && audioContext.state === 'running') {
       const now = audioContext.currentTime;
-      const targetGain = signal > 0.0005 ? signal * 0.082 : 0;
+      const targetGain = signal > 0.0005 ? signal * 0.22 : 0;
       station.audio.proximityGain.gain.setTargetAtTime(targetGain, now, signal > 0 ? 0.16 : 0.28);
       if (hasMarsListener && station.audio.panner.pan) {
         stationAudioTangent.copy(station.normal).addScaledVector(listenerNormal, -station.normal.dot(listenerNormal)).normalize();
@@ -1763,14 +5466,14 @@ function updateSpeakerStations(time, listenerNormal, listenerHeading) {
 
     if (proximity > 0.16 && !station.wasInRange) {
       station.wasInRange = true;
-      showBanner(`LOCAL SIGNAL · ${station.name}`);
+      showBanner(audioStarted ? `PA BROADCAST ACQUIRED · ${station.name}` : 'TAP AUDIO · PA MUSIC IN RANGE');
     } else if (proximity < 0.025) {
       station.wasInRange = false;
     }
   });
 
   if (ambientBusGain && audioStarted && audioEnabled && audioContext.state === 'running') {
-    ambientBusGain.gain.setTargetAtTime(0.035 - strongestSignal * 0.014, audioContext.currentTime, 0.35);
+    ambientBusGain.gain.setTargetAtTime(0.052 - strongestSignal * 0.03, audioContext.currentTime, 0.35);
   }
 }
 
@@ -1956,6 +5659,12 @@ const shuttleFlightUp = new THREE.Vector3();
 const shuttleFlightBack = new THREE.Vector3();
 const shuttleFlightMatrix = new THREE.Matrix4();
 const shuttleFlightDelta = new THREE.Vector3();
+const hyperBikeFlightDirection = new THREE.Vector3(0, 1, 0);
+const hyperBikeFlightRight = new THREE.Vector3();
+const hyperBikeFlightUp = new THREE.Vector3();
+const hyperBikeFlightBack = new THREE.Vector3();
+const hyperBikeFlightMatrix = new THREE.Matrix4();
+const hyperBikeFlightDelta = new THREE.Vector3();
 
 function setInteractionPrompt(text) {
   interactionPromptEl.textContent = text;
@@ -1973,12 +5682,13 @@ function stepWorldNormal(normal, direction, distance, radius) {
 }
 
 function surfacePositionForWorld(world, normal, offset = 0) {
-  if (world === 'moon') return MOON_CENTER.clone().addScaledVector(normal, MOON_RADIUS + offset);
+  if (world === 'moon') return MOON_CENTER.clone().addScaledVector(normal, MOON_RADIUS + getMoonHeight(normal) + offset);
+  if (world === 'zephyra') return ZEPHYRA_CENTER.clone().addScaledVector(normal, ZEPHYRA_RADIUS + getZephyraHeight(normal) + offset);
   return surfaceWorldPosition(normal, offset);
 }
 
 function arcDistanceForWorld(world, a, b) {
-  const radius = world === 'moon' ? MOON_RADIUS : PLANET_RADIUS;
+  const radius = world === 'moon' ? MOON_RADIUS : world === 'zephyra' ? ZEPHYRA_RADIUS : PLANET_RADIUS;
   return Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1)) * radius;
 }
 
@@ -1988,6 +5698,373 @@ function orientSurfaceRoot(root, normal, heading) {
   travelBasisMatrix.makeBasis(travelBasisRight, normal, travelBasisBack);
   root.quaternion.setFromRotationMatrix(travelBasisMatrix);
 }
+
+/* ---------- Lumi · autonomous moon friend ---------- */
+
+const MOON_FRIEND_ACTIVITIES = [
+  { id: 'patrol', label: 'PATROLLING LUNA COMMAND', kind: 'walk', target: 'roam', move: true, min: 10, max: 17, speed: 1.45, weight: 1.35, moods: ['FOCUSED', 'BRAVE'] },
+  { id: 'life-support', label: 'CHECKING LIFE SUPPORT', kind: 'console', target: 'command', move: true, min: 9, max: 15, speed: 1.25, weight: 1.1, moods: ['RESPONSIBLE', 'FOCUSED'] },
+  { id: 'dust-relay', label: 'DUSTING THE SOLAR RELAY', kind: 'repair', target: 'command', move: true, min: 8, max: 14, speed: 1.2, weight: 1, moods: ['HELPFUL', 'BUSY'] },
+  { id: 'samples', label: 'CATALOGING MOON ROCKS', kind: 'sample', target: 'roam', move: true, min: 10, max: 17, speed: 1.15, weight: 1.25, moods: ['CURIOUS', 'DELIGHTED'] },
+  { id: 'map-crater', label: 'MAPPING A CRATER EDGE', kind: 'scan', target: 'lookout', move: true, min: 11, max: 18, speed: 1.35, weight: 1.15, moods: ['CURIOUS', 'FOCUSED'] },
+  { id: 'moon-hops', label: 'PRACTICING LOW-G HOPS', kind: 'hop', target: 'roam', move: true, min: 9, max: 16, speed: 1.65, weight: 1, moods: ['PLAYFUL', 'EXCITED'] },
+  { id: 'stargaze', label: 'STARGAZING FOR A MINUTE', kind: 'stargaze', target: 'lookout', move: true, min: 8, max: 14, speed: 1.1, weight: 0.9, moods: ['DREAMY', 'PEACEFUL'] },
+  { id: 'radio-mars', label: 'RADIOING MARS', kind: 'radio', target: 'lookout', move: true, min: 7, max: 12, speed: 1.2, weight: 0.9, moods: ['CHATTY', 'HOPEFUL'] },
+  { id: 'watch-shuttle', label: 'WATCHING FOR YOUR SHUTTLE', kind: 'wave', target: 'pad', move: true, min: 8, max: 15, speed: 1.3, weight: 1.05, moods: ['HOPEFUL', 'FRIENDLY'] },
+  { id: 'repair-beacon', label: 'REPAIRING THE LANDING BEACON', kind: 'repair', target: 'beacon', move: true, min: 9, max: 16, speed: 1.2, weight: 1.05, moods: ['HELPFUL', 'DETERMINED'] },
+  { id: 'follow', label: 'FOLLOWING YOUR FOOTPRINTS', kind: 'wave', target: 'player', move: true, min: 8, max: 14, speed: 1.55, weight: 0.95, moods: ['FRIENDLY', 'CURIOUS'] },
+  { id: 'dance', label: 'DOING A TINY VICTORY DANCE', kind: 'dance', target: 'hold', move: false, min: 6, max: 10, speed: 0, weight: 0.7, moods: ['SILLY', 'PROUD'] },
+  { id: 'meditate', label: 'MEDITATING IN 0.16 G', kind: 'meditate', target: 'hold', move: false, min: 7, max: 13, speed: 0, weight: 0.7, moods: ['PEACEFUL', 'FLOATY'] },
+  { id: 'inspect-bus', label: 'INSPECTING THE SPACE BUS PAD', kind: 'scan', target: 'pad', move: true, min: 9, max: 15, speed: 1.25, weight: 1, moods: ['THOROUGH', 'CURIOUS'] },
+  { id: 'shooting-stars', label: 'COUNTING SHOOTING STARS', kind: 'stargaze', target: 'lookout', move: true, min: 8, max: 14, speed: 1.1, weight: 0.85, moods: ['DREAMY', 'AMAZED'] },
+  { id: 'footprint-trail', label: 'LEAVING A FRIENDLY FOOTPRINT TRAIL', kind: 'walk', target: 'roam', move: true, min: 11, max: 18, speed: 1.4, weight: 1.1, moods: ['PLAYFUL', 'BUSY'] },
+  { id: 'nap', label: 'TAKING A TINY HABITAT NAP', kind: 'nap', target: 'command', move: true, min: 7, max: 12, speed: 1.05, weight: 0.6, moods: ['SLEEPY', 'COZY'] },
+  { id: 'safety', label: 'RUNNING A MOON SAFETY CHECK', kind: 'scan', target: 'roam', move: true, min: 10, max: 17, speed: 1.4, weight: 1.15, moods: ['CAREFUL', 'PROUD'] },
+  { id: 'screens', label: 'READING COMMAND CENTER SCREENS', kind: 'console', target: 'command', move: true, min: 8, max: 14, speed: 1.15, weight: 1, moods: ['NERDY', 'FOCUSED'] },
+  { id: 'hello', label: 'WAVING HELLO TO YOU', kind: 'wave', target: 'player', move: true, min: 7, max: 11, speed: 1.5, weight: 0.8, moods: ['FRIENDLY', 'EXCITED'] },
+];
+
+const MOON_FRIEND_HOME_NORMAL = slerpNormals(MOON_PAD_NORMAL, MOON_COMMAND_NORMAL, 0.46);
+const moonFriendNormal = MOON_FRIEND_HOME_NORMAL.clone();
+const moonFriendHeading = tangentHeadingForNormal(moonFriendNormal);
+const moonFriendTargetNormal = moonFriendNormal.clone();
+const moonFriendMoveAxis = new THREE.Vector3();
+const moonFriendDesiredHeading = new THREE.Vector3();
+const moonFriendStatusEl = document.getElementById('moon-friend-status');
+const moonFriendActivityEl = document.getElementById('moon-friend-activity');
+const moonFriendMoodEl = document.getElementById('moon-friend-mood');
+const moonFriendDecisionsEl = document.getElementById('moon-friend-decisions');
+
+function buildMoonFriend() {
+  const root = new THREE.Group();
+  root.name = 'Lumi · autonomous moon friend';
+  scene.add(root);
+
+  const actor = buildAlien();
+  actor.alien.name = 'Lumi';
+  actor.alien.scale.setScalar(0.74);
+  actor.alien.position.y = 0.04;
+  actor.alien.traverse((child) => {
+    if (!child.isMesh || !child.material?.color) return;
+    const color = child.material.color.getHex();
+    if (color === 0x8fb95a) child.material.color.setHex(0x70d3ad);
+    else if (color === 0x668b42) child.material.color.setHex(0x48947c);
+    else if (color === 0x4c6c32) child.material.color.setHex(0x356c61);
+    else if (color === 0x405b30) child.material.color.setHex(0x294f4c);
+  });
+
+  const headRig = new THREE.Group();
+  headRig.name = 'Lumi head rig';
+  headRig.position.y = 3.6;
+  const headParts = actor.alien.children.filter((child) => child.position.y >= 3.35);
+  headParts.forEach((part) => {
+    actor.alien.remove(part);
+    part.position.y -= headRig.position.y;
+    headRig.add(part);
+  });
+  actor.alien.add(headRig);
+  root.add(actor.alien);
+
+  const helmet = new THREE.Mesh(
+    new THREE.SphereGeometry(1.3, 32, 22),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xa7efff,
+      transparent: true,
+      opacity: 0.16,
+      roughness: 0.08,
+      metalness: 0.05,
+      transmission: 0.18,
+      clearcoat: 1,
+      clearcoatRoughness: 0.05,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  helmet.position.y = 0.28;
+  helmet.scale.set(1, 1.1, 0.96);
+  helmet.renderOrder = 3;
+  headRig.add(helmet);
+
+  const suitOrange = new THREE.MeshStandardMaterial({
+    color: 0xff8b4f,
+    emissive: 0x7a260e,
+    emissiveIntensity: 0.55,
+    metalness: 0.24,
+    roughness: 0.38,
+  });
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.39, 0.075, 9, 28), suitOrange);
+  collar.position.y = 2.93;
+  collar.rotation.x = Math.PI / 2;
+  actor.alien.add(collar);
+
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.025, 0.65, 8), stdMat(0x7e98a8, { metalness: 0.7, roughness: 0.3 }));
+  antenna.position.set(0.72, 1.37, 0.04);
+  antenna.rotation.z = -0.24;
+  headRig.add(antenna);
+  const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), suitOrange);
+  antennaTip.position.set(0.8, 1.68, 0.04);
+  headRig.add(antennaTip);
+
+  const scanner = new THREE.Group();
+  const scannerBody = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.42, 0.16), stdMat(0x172a36, { metalness: 0.68, roughness: 0.32 }));
+  scanner.add(scannerBody);
+  const scannerScreen = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.16, 0.22),
+    new THREE.MeshBasicMaterial({ color: 0x7effdf, toneMapped: false })
+  );
+  scannerScreen.position.z = -0.085;
+  scanner.add(scannerScreen);
+  scanner.position.set(0.13, -0.56, -0.13);
+  actor.arms[1].fore.add(scanner);
+
+  const label = makeLabelSprite('LUMI · MOON FRIEND', '#75f4d2');
+  label.position.set(0, 4.65, 0);
+  label.scale.set(4.25, 0.82, 1);
+  root.add(label);
+
+  return { root, actor, headRig, label, antennaTip, scannerScreen };
+}
+
+const moonFriendRuntime = buildMoonFriend();
+let moonFriendActivity = MOON_FRIEND_ACTIVITIES[0];
+let moonFriendActivityRemaining = 0;
+let moonFriendActivityElapsed = 0;
+let moonFriendDecisionCount = 0;
+let moonFriendMood = 'CURIOUS';
+let moonFriendHopHeight = 0;
+let moonFriendHopVelocity = 0;
+let moonFriendHopCooldown = 0.6;
+let moonFriendGrounded = true;
+let moonFriendDiscovered = false;
+let moonFriendWelcomeTimer = 0;
+const moonFriendHistory = [];
+
+function moonFriendDestination(targetType) {
+  if (targetType === 'hold') return moonFriendNormal.clone();
+  if (targetType === 'player' && currentWorld === 'moon' && travelMode === 'walking') return footNormal.clone();
+  if (targetType === 'pad') return stepWorldNormal(MOON_PAD_NORMAL, MOON_BUS_HEADING, 5.4, MOON_RADIUS);
+  if (targetType === 'command') return stepWorldNormal(MOON_COMMAND_NORMAL, MOON_COMMAND_HEADING, 3.3, MOON_RADIUS);
+  if (targetType === 'beacon') {
+    const side = MOON_COMMAND_RIGHT.clone().addScaledVector(MOON_COMMAND_NORMAL, -MOON_COMMAND_RIGHT.dot(MOON_COMMAND_NORMAL)).normalize();
+    return stepWorldNormal(MOON_COMMAND_NORMAL, side, 3.1, MOON_RADIUS);
+  }
+  const direction = tangentHeadingForNormal(MOON_FRIEND_HOME_NORMAL)
+    .applyAxisAngle(MOON_FRIEND_HOME_NORMAL, Math.random() * Math.PI * 2)
+    .normalize();
+  const distance = targetType === 'lookout' ? 8.5 + Math.random() * 4.5 : 3.5 + Math.random() * 8.5;
+  return stepWorldNormal(MOON_FRIEND_HOME_NORMAL, direction, distance, MOON_RADIUS);
+}
+
+function chooseMoonFriendActivity(forcedId = null) {
+  let selected = forcedId ? MOON_FRIEND_ACTIVITIES.find((activity) => activity.id === forcedId) : null;
+  if (!selected) {
+    const recentIds = new Set(moonFriendHistory.slice(-3));
+    let choices = MOON_FRIEND_ACTIVITIES.filter((activity) => !recentIds.has(activity.id));
+    if (currentWorld !== 'moon' || travelMode !== 'walking') choices = choices.filter((activity) => activity.target !== 'player');
+    let roll = Math.random() * choices.reduce((sum, activity) => sum + activity.weight, 0);
+    selected = choices[choices.length - 1];
+    for (const activity of choices) {
+      roll -= activity.weight;
+      if (roll <= 0) {
+        selected = activity;
+        break;
+      }
+    }
+  }
+
+  moonFriendActivity = selected;
+  moonFriendActivityRemaining = THREE.MathUtils.lerp(selected.min, selected.max, Math.random());
+  moonFriendActivityElapsed = 0;
+  moonFriendTargetNormal.copy(moonFriendDestination(selected.target));
+  moonFriendMood = selected.moods[Math.floor(Math.random() * selected.moods.length)];
+  moonFriendDecisionCount += 1;
+  moonFriendHistory.push(selected.id);
+  if (moonFriendHistory.length > 6) moonFriendHistory.shift();
+  moonFriendActivityEl.textContent = selected.label;
+  moonFriendMoodEl.textContent = moonFriendMood;
+  moonFriendDecisionsEl.textContent = String(moonFriendDecisionCount).padStart(3, '0');
+}
+
+function isNearMoonFriend(normal, radius = 3.8) {
+  return arcDistanceForWorld('moon', normal, moonFriendNormal) < radius;
+}
+
+function greetMoonFriend() {
+  chooseMoonFriendActivity('hello');
+  const replies = [
+    'LUMI SAVED YOU THE SHINIEST MOON ROCK',
+    'LUMI SAYS YOUR FOOTPRINTS LOOK EXCELLENT',
+    'LUMI IS VERY GLAD YOU CAUGHT THE SPACE BUS',
+    'LUMI HAS BEEN KEEPING THE MOON COZY FOR YOU',
+  ];
+  showBanner(replies[Math.floor(Math.random() * replies.length)]);
+}
+
+function updateMoonFriend(dt, time, activePlayerNormal) {
+  moonFriendActivityRemaining -= dt;
+  moonFriendActivityElapsed += dt;
+  if (moonFriendActivityRemaining <= 0) chooseMoonFriendActivity();
+
+  if (moonFriendActivity.target === 'player' && activePlayerNormal) moonFriendTargetNormal.copy(activePlayerNormal);
+  const distanceToTarget = arcDistanceForWorld('moon', moonFriendNormal, moonFriendTargetNormal);
+  const stopDistance = moonFriendActivity.target === 'player' ? 2.7 : 0.55;
+  const tooCloseToPlayer = activePlayerNormal && arcDistanceForWorld('moon', moonFriendNormal, activePlayerNormal) < 1.9;
+  const moving = moonFriendActivity.move && distanceToTarget > stopDistance && !tooCloseToPlayer;
+
+  if (moving) {
+    moonFriendDesiredHeading.copy(moonFriendTargetNormal)
+      .addScaledVector(moonFriendNormal, -moonFriendTargetNormal.dot(moonFriendNormal));
+    if (moonFriendDesiredHeading.lengthSq() > 0.00001) {
+      moonFriendDesiredHeading.normalize();
+      moonFriendHeading.lerp(moonFriendDesiredHeading, 1 - Math.exp(-dt * 4.2));
+      moonFriendHeading.addScaledVector(moonFriendNormal, -moonFriendHeading.dot(moonFriendNormal)).normalize();
+      const step = Math.min(distanceToTarget - stopDistance, moonFriendActivity.speed * dt);
+      moonFriendMoveAxis.crossVectors(moonFriendNormal, moonFriendHeading).normalize();
+      moonFriendNormal.applyAxisAngle(moonFriendMoveAxis, step / MOON_RADIUS).normalize();
+      moonFriendHeading.applyAxisAngle(moonFriendMoveAxis, step / MOON_RADIUS)
+        .addScaledVector(moonFriendNormal, -moonFriendHeading.dot(moonFriendNormal)).normalize();
+    }
+  } else if (activePlayerNormal && moonFriendActivity.target === 'player') {
+    moonFriendDesiredHeading.copy(activePlayerNormal)
+      .addScaledVector(moonFriendNormal, -activePlayerNormal.dot(moonFriendNormal));
+    if (moonFriendDesiredHeading.lengthSq() > 0.00001) {
+      moonFriendHeading.lerp(moonFriendDesiredHeading.normalize(), 1 - Math.exp(-dt * 5.5));
+      moonFriendHeading.addScaledVector(moonFriendNormal, -moonFriendHeading.dot(moonFriendNormal)).normalize();
+    }
+  }
+
+  if (moonFriendActivity.kind === 'hop') {
+    moonFriendHopCooldown -= dt;
+    if (moonFriendGrounded && moonFriendHopCooldown <= 0) {
+      moonFriendHopVelocity = 4.4 + Math.random() * 1.2;
+      moonFriendGrounded = false;
+      moonFriendHopCooldown = 2.4 + Math.random() * 1.8;
+    }
+  }
+  if (!moonFriendGrounded) {
+    moonFriendHopVelocity -= 1.62 * dt;
+    moonFriendHopHeight += moonFriendHopVelocity * dt;
+    if (moonFriendHopHeight <= 0) {
+      moonFriendHopHeight = 0;
+      moonFriendHopVelocity = 0;
+      moonFriendGrounded = true;
+    }
+  }
+  const friendThrustersActive = moonFriendActivity.kind === 'hop' && !moonFriendGrounded && moonFriendHopVelocity > 2.2;
+  moonFriendRuntime.actor.thrusterFlames.visible = friendThrustersActive;
+  if (friendThrustersActive) moonFriendRuntime.actor.thrusterFlames.scale.y = 0.5 + Math.sin(time * 38) * 0.16;
+
+  moonFriendRuntime.root.position.copy(surfacePositionForWorld('moon', moonFriendNormal, moonFriendHopHeight + 0.04));
+  orientSurfaceRoot(moonFriendRuntime.root, moonFriendNormal, moonFriendHeading);
+
+  const actor = moonFriendRuntime.actor;
+  const walkAmount = moving ? 1 : 0;
+  const stride = Math.sin(time * 7.2) * walkAmount;
+  let crouch = 0;
+  let headPitch = 0;
+  let headYaw = Math.sin(time * 0.7) * 0.08;
+  let bodyRoll = Math.sin(time * 1.15) * 0.018;
+  const armTargetX = [stride * -0.48, stride * 0.48];
+  const armTargetZ = [0.1, -0.1];
+  const foreTargetX = [0.12, 0.12];
+  const thighTargetX = [stride * 0.72, stride * -0.72];
+  const shinTargetX = [Math.max(0, -stride) * 0.62, Math.max(0, stride) * 0.62];
+
+  if (!moving) {
+    if (moonFriendActivity.kind === 'wave') {
+      armTargetZ[1] = -1.52;
+      armTargetX[1] = Math.sin(time * 6.8) * 0.32;
+      foreTargetX[1] = 0.75;
+      headYaw = Math.sin(time * 1.9) * 0.16;
+    } else if (moonFriendActivity.kind === 'scan') {
+      armTargetX[1] = 1.22;
+      foreTargetX[1] = 0.64;
+      headYaw = Math.sin(time * 0.8) * 0.48;
+    } else if (moonFriendActivity.kind === 'repair') {
+      armTargetX[0] = 1.18 + Math.sin(time * 5.2) * 0.18;
+      armTargetX[1] = 1.34 - Math.sin(time * 5.2) * 0.18;
+      foreTargetX[0] = 0.72;
+      foreTargetX[1] = 0.56;
+    } else if (moonFriendActivity.kind === 'console') {
+      armTargetX[0] = 1.35 + Math.sin(time * 4.4) * 0.12;
+      armTargetX[1] = 1.35 + Math.cos(time * 4.1) * 0.12;
+      foreTargetX[0] = 0.52;
+      foreTargetX[1] = 0.52;
+      headPitch = 0.16;
+    } else if (moonFriendActivity.kind === 'sample') {
+      crouch = 0.32;
+      armTargetX[1] = 1.72;
+      foreTargetX[1] = 0.2;
+      thighTargetX[0] = -0.52;
+      thighTargetX[1] = -0.52;
+      shinTargetX[0] = 1.08;
+      shinTargetX[1] = 1.08;
+      headPitch = 0.34;
+    } else if (moonFriendActivity.kind === 'stargaze') {
+      headPitch = -0.42;
+      armTargetX[0] = -0.18;
+      armTargetX[1] = -0.18;
+    } else if (moonFriendActivity.kind === 'radio') {
+      armTargetZ[0] = 1.32;
+      foreTargetX[0] = 1.22;
+      headYaw = -0.18;
+    } else if (moonFriendActivity.kind === 'dance') {
+      bodyRoll = Math.sin(time * 5.8) * 0.22;
+      armTargetZ[0] = 1.1 + Math.sin(time * 4.6) * 0.45;
+      armTargetZ[1] = -1.1 - Math.sin(time * 4.6) * 0.45;
+      thighTargetX[0] = Math.sin(time * 7) * 0.48;
+      thighTargetX[1] = -Math.sin(time * 7) * 0.48;
+    } else if (moonFriendActivity.kind === 'meditate') {
+      crouch = 0.38;
+      thighTargetX[0] = -1.05;
+      thighTargetX[1] = -1.05;
+      shinTargetX[0] = 1.72;
+      shinTargetX[1] = 1.72;
+      armTargetX[0] = 0.42;
+      armTargetX[1] = 0.42;
+      foreTargetX[0] = 1.1;
+      foreTargetX[1] = 1.1;
+    } else if (moonFriendActivity.kind === 'nap') {
+      crouch = 0.45;
+      thighTargetX[0] = -0.92;
+      thighTargetX[1] = -0.92;
+      shinTargetX[0] = 1.55;
+      shinTargetX[1] = 1.55;
+      headPitch = 0.52;
+      headYaw = Math.sin(time * 0.45) * 0.04;
+    }
+  }
+
+  actor.legs.forEach((leg, index) => {
+    leg.thigh.rotation.x = THREE.MathUtils.damp(leg.thigh.rotation.x, thighTargetX[index], 10, dt);
+    leg.shin.rotation.x = THREE.MathUtils.damp(leg.shin.rotation.x, shinTargetX[index], 10, dt);
+  });
+  actor.arms.forEach((arm, index) => {
+    arm.upper.rotation.x = THREE.MathUtils.damp(arm.upper.rotation.x, armTargetX[index], 9, dt);
+    arm.upper.rotation.z = THREE.MathUtils.damp(arm.upper.rotation.z, armTargetZ[index], 9, dt);
+    arm.fore.rotation.x = THREE.MathUtils.damp(arm.fore.rotation.x, foreTargetX[index], 9, dt);
+  });
+  actor.alien.position.y = THREE.MathUtils.damp(actor.alien.position.y, 0.04 - crouch, 9, dt);
+  actor.alien.rotation.z = THREE.MathUtils.damp(actor.alien.rotation.z, bodyRoll, 9, dt);
+  moonFriendRuntime.headRig.rotation.x = THREE.MathUtils.damp(moonFriendRuntime.headRig.rotation.x, headPitch, 7, dt);
+  moonFriendRuntime.headRig.rotation.y = THREE.MathUtils.damp(moonFriendRuntime.headRig.rotation.y, headYaw, 7, dt);
+  actor.body.scale.y = 1 + Math.sin(time * 1.65) * 0.018;
+  moonFriendRuntime.label.position.y = 4.65 + Math.sin(time * 1.8) * 0.08;
+  moonFriendRuntime.antennaTip.material.emissiveIntensity = 0.65 + Math.sin(time * 5.2) * 0.45;
+  moonFriendRuntime.scannerScreen.material.color.setHSL(0.45 + Math.sin(time * 0.7) * 0.04, 0.82, 0.66);
+
+  const playerIsOnMoon = Boolean(activePlayerNormal);
+  moonFriendStatusEl.classList.toggle('show', playerIsOnMoon);
+  if (playerIsOnMoon && !moonFriendDiscovered) {
+    moonFriendWelcomeTimer += dt;
+    if (moonFriendWelcomeTimer > 2.1 && arcDistanceForWorld('moon', activePlayerNormal, moonFriendNormal) < 10) {
+      moonFriendDiscovered = true;
+      showBanner('LUMI THE AUTONOMOUS MOON FRIEND FOUND YOU');
+    }
+  }
+}
+
+chooseMoonFriendActivity('watch-shuttle');
 
 function poseAlienForRover() {
   alienDriver.thrusterFlames.visible = false;
@@ -2068,13 +6145,132 @@ function boardShuttle() {
   showBanner(`ABOARD SPACE BUS · DEPARTS IN ${Math.max(1, Math.ceil(shuttleDockTimer))} SEC`);
 }
 
+function hyperBikeDockNormal(world) {
+  return world === 'zephyra' ? ZEPHYRA_PAD_NORMAL : MOON_BIKE_DOCK_NORMAL;
+}
+
+function isNearHyperBike(normal, radius = HYPERBIKE_BOARD_RADIUS) {
+  if (hyperBikeTransit || hyperBikeLocation !== currentWorld) return false;
+  if (currentWorld !== 'moon' && currentWorld !== 'zephyra') return false;
+  return arcDistanceForWorld(currentWorld, normal, hyperBikeDockNormal(currentWorld)) < radius;
+}
+
+function poseAlienForHyperBike() {
+  alienDriver.thrusterFlames.visible = false;
+  hyperBikeRuntime.bikeSeat.add(alienDriver.alien);
+  footRoot.visible = false;
+  alienDriver.alien.scale.setScalar(0.62);
+  alienDriver.alien.position.set(0, -0.2, -0.08);
+  alienDriver.alien.rotation.set(0, 0, 0);
+  legs.forEach((leg) => {
+    leg.thigh.rotation.x = -1.08;
+    leg.shin.rotation.x = 1.58;
+  });
+  arms.forEach((arm, index) => {
+    arm.upper.rotation.x = 1.28;
+    arm.upper.rotation.z = index === 0 ? -0.18 : 0.18;
+    arm.fore.rotation.x = 0.34;
+  });
+}
+
+function startHyperBikeTrip() {
+  const destination = hyperBikeLocation === 'moon' ? 'zephyra' : 'moon';
+  const start = (hyperBikeLocation === 'moon' ? MOON_BIKE_DOCK_POSITION : ZEPHYRA_BIKE_DOCK_POSITION).clone();
+  const end = (destination === 'moon' ? MOON_BIKE_DOCK_POSITION : ZEPHYRA_BIKE_DOCK_POSITION).clone();
+  const control = start.clone().add(end).multiplyScalar(0.5);
+  control.y += 98 * PLANET_SCALE;
+  control.z -= 38 * PLANET_SCALE;
+  hyperBikeTransit = {
+    from: hyperBikeLocation,
+    to: destination,
+    start,
+    end,
+    control,
+    elapsed: 0,
+    duration: HYPERBIKE_TRAVEL_DURATION,
+  };
+  hyperBikeRuntime.warpTail.visible = true;
+  const departureDirection = control.clone().sub(start).normalize();
+  camera.position.copy(start).addScaledVector(departureDirection, -18).addScaledVector(UP, 10);
+  camera.up.copy(UP);
+  camLookTarget.copy(start).addScaledVector(departureDirection, 3.5);
+  showBanner(`VOLT BIKE HYPERSPEED · DESTINATION ${destination.toUpperCase()}`);
+}
+
+function boardHyperBike() {
+  poseAlienForHyperBike();
+  travelMode = 'hyperbike';
+  startHyperBikeTrip();
+}
+
+function disembarkHyperBike() {
+  const world = hyperBikeLocation;
+  const padNormal = hyperBikeDockNormal(world);
+  const radius = world === 'zephyra' ? ZEPHYRA_RADIUS : MOON_RADIUS;
+  const heading = world === 'zephyra' ? ZEPHYRA_BIKE_HEADING : MOON_BIKE_HEADING;
+  const exitDirection = heading.clone().cross(padNormal).normalize();
+  const exitNormal = stepWorldNormal(padNormal, exitDirection, 4.3, radius);
+  const exitHeading = heading.clone().applyAxisAngle(new THREE.Vector3().crossVectors(padNormal, exitDirection).normalize(), 4.3 / radius);
+  attachAlienOnFoot(world, exitNormal, exitHeading);
+  travelMode = 'walking';
+  showBanner(world === 'zephyra' ? 'ZEPHYRA LANDFALL · ELECTRIC SKY ACTIVE' : 'VOLT BIKE RETURNED TO THE MOON');
+}
+
+function updateHyperBikeTravel(dt, time) {
+  hyperBikeRuntime.electricMaterial.emissiveIntensity = 1.75 + Math.sin(time * 8.4) * 0.5;
+  hyperBikeRuntime.electricCore.scale.setScalar(0.9 + Math.sin(time * 10.5) * 0.12);
+  hyperBikeRuntime.wheelRings.forEach((wheel, index) => {
+    wheel.rotation.x += dt * (hyperBikeTransit ? 22 + index * 2 : 2.2);
+  });
+  if (!hyperBikeTransit) {
+    hyperBikeDisplaySpeed = 0;
+    hyperBikeRuntime.warpTail.visible = false;
+    hyperBikeRuntime.headlight.intensity = 2.2 + Math.sin(time * 4.8) * 0.45;
+    return;
+  }
+
+  hyperBikeTransit.elapsed += dt;
+  const rawProgress = THREE.MathUtils.clamp(hyperBikeTransit.elapsed / hyperBikeTransit.duration, 0, 1);
+  const progress = rawProgress * rawProgress * (3 - 2 * rawProgress);
+  const oneMinus = 1 - progress;
+  hyperBike.position.set(0, 0, 0)
+    .addScaledVector(hyperBikeTransit.start, oneMinus * oneMinus)
+    .addScaledVector(hyperBikeTransit.control, 2 * oneMinus * progress)
+    .addScaledVector(hyperBikeTransit.end, progress * progress);
+  hyperBikeFlightDirection.copy(hyperBikeTransit.control).sub(hyperBikeTransit.start).multiplyScalar(2 * oneMinus)
+    .addScaledVector(hyperBikeFlightDelta.copy(hyperBikeTransit.end).sub(hyperBikeTransit.control), 2 * progress)
+    .normalize();
+  const upReference = Math.abs(hyperBikeFlightDirection.dot(UP)) > 0.92 ? travelBasisRight.set(1, 0, 0) : UP;
+  hyperBikeFlightRight.copy(hyperBikeFlightDirection).cross(upReference).normalize();
+  hyperBikeFlightUp.copy(hyperBikeFlightRight).cross(hyperBikeFlightDirection).normalize();
+  hyperBikeFlightBack.copy(hyperBikeFlightDirection).multiplyScalar(-1);
+  hyperBikeFlightMatrix.makeBasis(hyperBikeFlightRight, hyperBikeFlightUp, hyperBikeFlightBack);
+  hyperBike.quaternion.setFromRotationMatrix(hyperBikeFlightMatrix);
+  hyperBikeRuntime.warpTail.scale.z = 0.72 + Math.sin(time * 34) * 0.16 + Math.sin(progress * Math.PI) * 1.35;
+  hyperBikeRuntime.headlight.intensity = 5.2 + Math.sin(time * 28) * 1.4;
+  hyperBikeDisplaySpeed = Math.round(18000 + Math.sin(progress * Math.PI) * 82000);
+
+  if (rawProgress >= 1) {
+    hyperBikeLocation = hyperBikeTransit.to;
+    if (hyperBikeLocation === 'zephyra') zephyraGroveArrivalCharge = 1;
+    const dockPosition = hyperBikeLocation === 'moon' ? MOON_BIKE_DOCK_POSITION : ZEPHYRA_BIKE_DOCK_POSITION;
+    const dockQuaternion = hyperBikeLocation === 'moon' ? MOON_BIKE_DOCK_QUATERNION : ZEPHYRA_BIKE_DOCK_QUATERNION;
+    hyperBike.position.copy(dockPosition);
+    hyperBike.quaternion.copy(dockQuaternion);
+    hyperBikeTransit = null;
+    hyperBikeDisplaySpeed = 0;
+    hyperBikeRuntime.warpTail.visible = false;
+    showBanner(`${hyperBikeLocation.toUpperCase()} ARRIVAL · PRESS E TO DISEMBARK`);
+  }
+}
+
 function startScheduledShuttleTrip() {
   const destination = shuttleLocation === 'mars' ? 'moon' : 'mars';
   const start = (shuttleLocation === 'mars' ? MARS_DOCK_POSITION : MOON_DOCK_POSITION).clone();
   const end = (destination === 'mars' ? MARS_DOCK_POSITION : MOON_DOCK_POSITION).clone();
   const control = start.clone().add(end).multiplyScalar(0.5);
-  control.y += 116;
-  control.x -= 18;
+  control.y += 116 * PLANET_SCALE;
+  control.x -= 18 * PLANET_SCALE;
   shuttleTransit = {
     from: shuttleLocation,
     to: destination,
@@ -2122,7 +6318,32 @@ function handleInteraction() {
     return;
   }
 
+  if (travelMode === 'hyperbike') {
+    if (hyperBikeTransit) showBanner(`HYPERSPEED LOCKED · ${hyperBikeTransit.to.toUpperCase()} INBOUND`);
+    else disembarkHyperBike();
+    return;
+  }
+
   if (travelMode !== 'walking') return;
+  if (isNearHyperBike(footNormal)) {
+    boardHyperBike();
+    return;
+  }
+  if (currentWorld === 'moon' && isNearMoonFriend(footNormal)) {
+    greetMoonFriend();
+    return;
+  }
+  if (currentWorld === 'moon' && isNearMoonCommand(footNormal)) {
+    moonCommandSystemsActive = !moonCommandSystemsActive;
+    showBanner(moonCommandSystemsActive
+      ? 'LUNA COMMAND ONLINE · MARS UPLINK LOCKED'
+      : 'LUNA COMMAND STANDBY · CONSOLES DIMMED');
+    return;
+  }
+  if (currentWorld === 'zephyra') {
+    showBanner('VOLT BIKE OUT OF RANGE');
+    return;
+  }
   const padNormal = currentWorld === 'moon' ? MOON_PAD_NORMAL : MARS_PORT.normal;
   const nearPad = arcDistanceForWorld(currentWorld, footNormal, padNormal) < SHUTTLE_BOARD_RADIUS;
   const nearShuttle = !shuttleTransit && shuttleLocation === currentWorld && nearPad;
@@ -2154,6 +6375,19 @@ function shuttleEtaToWorld(world) {
   }
   if (shuttleLocation === world) return 0;
   return shuttleDockTimer + SHUTTLE_TRAVEL_DURATION;
+}
+
+function isPlayerNearLandedShuttle() {
+  if (travelMode === 'boarded') return true;
+  if (shuttleTransit || shuttleLocation !== currentWorld) return false;
+  if (travelMode === 'driving' && shuttleLocation === 'mars') {
+    return geodesicDistance(playerNormal, MARS_PORT.normal) < SHUTTLE_STATUS_RADIUS;
+  }
+  if (travelMode === 'walking') {
+    const padNormal = currentWorld === 'moon' ? MOON_PAD_NORMAL : MARS_PORT.normal;
+    return arcDistanceForWorld(currentWorld, footNormal, padNormal) < SHUTTLE_STATUS_RADIUS;
+  }
+  return false;
 }
 
 function updateShuttleFlight(dt, time) {
@@ -2217,8 +6451,8 @@ function updateShuttleFlight(dt, time) {
 }
 
 function updateOnFoot(dt, time, throttleInput, steeringInput) {
-  const radius = currentWorld === 'moon' ? MOON_RADIUS : PLANET_RADIUS;
-  const walkTarget = throttleInput * (currentWorld === 'moon' ? 3.8 : 4.8);
+  const radius = currentWorld === 'moon' ? MOON_RADIUS : currentWorld === 'zephyra' ? ZEPHYRA_RADIUS : PLANET_RADIUS;
+  const walkTarget = throttleInput * (currentWorld === 'moon' ? 3.8 : currentWorld === 'zephyra' ? 4.4 : 4.8);
   footSpeed = THREE.MathUtils.damp(footSpeed, walkTarget, throttleInput === 0 ? 6 : 8, dt);
   footHeading.applyAxisAngle(footNormal, steeringInput * 2.15 * dt).normalize();
 
@@ -2230,31 +6464,58 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     footHeading.copy(candidateHeading).addScaledVector(footNormal, -candidateHeading.dot(footNormal)).normalize();
   }
 
+  let zephyraFluxStrength = 0;
+  if (currentWorld === 'zephyra') {
+    const fluxDistance = arcDistanceForWorld('zephyra', footNormal, ZEPHYRA_FLUX_NORMAL);
+    zephyraFluxStrength = 1 - THREE.MathUtils.smoothstep(fluxDistance, 3.4, 14.2);
+    if (zephyraFluxStrength > 0.015 && fluxDistance > 1.15) {
+      zephyraFluxToward.copy(ZEPHYRA_FLUX_NORMAL)
+        .addScaledVector(footNormal, -ZEPHYRA_FLUX_NORMAL.dot(footNormal))
+        .normalize();
+      zephyraFluxAxis.crossVectors(footNormal, zephyraFluxToward).normalize();
+      const pullSpeed = zephyraFluxStrength * (0.22 + (Math.sin(time * 2.6) * 0.5 + 0.5) * 0.34);
+      const pullAngle = pullSpeed * dt / ZEPHYRA_RADIUS;
+      footNormal.applyAxisAngle(zephyraFluxAxis, pullAngle).normalize();
+      footHeading.applyAxisAngle(zephyraFluxAxis, pullAngle)
+        .addScaledVector(footNormal, -footHeading.dot(footNormal))
+        .normalize();
+    }
+  }
+
   if (jumpQueued && footGrounded) {
-    footVerticalVelocity = currentWorld === 'moon' ? 7.4 : 8.4;
+    footVerticalVelocity = 1.35;
     footGrounded = false;
     footThrusterFuel = FOOT_THRUSTER_FUEL_MAX;
-    footThrusterBurstTime = 0.86;
-    showBanner('HIGH-THRUST JETPACK · HOLD SPACE TO CLIMB');
+    showBanner('JETPACK FIRING · RELEASE SPACE TO DROP');
   }
   jumpQueued = false;
-  footThrusterBurstTime = Math.max(0, footThrusterBurstTime - dt);
   const footThrusterHeld = Boolean(keys[' '] || keys.space || keys.spacebar);
-  const footThrusterActive = !footGrounded && (footThrusterBurstTime > 0 || footThrusterHeld) && footThrusterFuel > 0;
+  const footThrusterActive = !footGrounded && footThrusterHeld && footThrusterFuel > 0;
+  const footThrusterPulse = footThrusterActive
+    ? (Math.sin(time * 33.5) > -0.08 ? 1 : 0.16) * (Math.sin(time * 76) > 0.32 ? 1 : 0.78)
+    : 0;
+  if (footThrusterWasActive && !footThrusterActive && !footGrounded) {
+    footVerticalVelocity = Math.min(footVerticalVelocity, currentWorld === 'moon' ? -1.4 : currentWorld === 'zephyra' ? -2.2 : -2.8);
+    if (footJumpHeight > 0.8) showBanner('THRUST CUT · DROPPING');
+  }
+  footThrusterWasActive = footThrusterActive;
   alienDriver.thrusterFlames.visible = footThrusterActive;
   if (footThrusterActive) {
     footThrusterFuel = Math.max(0, footThrusterFuel - dt);
-    footVerticalVelocity = THREE.MathUtils.damp(footVerticalVelocity, currentWorld === 'moon' ? 4.7 : 5.4, 3.4, dt);
-    alienDriver.thrusterFlames.scale.y = 0.78 + Math.sin(time * 28) * 0.18;
+    const thrustAcceleration = (currentWorld === 'moon' ? 13.5 : currentWorld === 'zephyra' ? 17 : 19.5) * (0.34 + footThrusterPulse * 0.66);
+    footVerticalVelocity = Math.min(12.5, footVerticalVelocity + thrustAcceleration * dt);
+    alienDriver.thrusterFlames.scale.y = 0.42 + footThrusterPulse * 1.02;
   }
+  updateThrusterAudio(footThrusterActive, false, footThrusterPulse);
   if (!footGrounded) {
-    footVerticalVelocity += (footThrusterActive ? -0.12 : currentWorld === 'moon' ? -1.62 : marsGravity) * dt;
+    const zephyraGravity = THREE.MathUtils.lerp(-5.1, -1.28, zephyraFluxStrength);
+    footVerticalVelocity += (currentWorld === 'moon' ? -1.62 : currentWorld === 'zephyra' ? zephyraGravity : marsGravity) * dt;
     footJumpHeight += footVerticalVelocity * dt;
     if (footJumpHeight <= 0) {
       footJumpHeight = 0;
       footVerticalVelocity = 0;
       footGrounded = true;
-      footThrusterBurstTime = 0;
+      footThrusterWasActive = false;
       alienDriver.thrusterFlames.visible = false;
     }
   } else {
@@ -2263,6 +6524,16 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
 
   footRoot.position.copy(surfacePositionForWorld(currentWorld, footNormal, footJumpHeight + 0.04));
   orientSurfaceRoot(footRoot, footNormal, footHeading);
+  if (currentWorld === 'moon' && footGrounded && Math.abs(footSpeed) > 0.32) {
+    moonFootprintTravel += Math.abs(footSpeed) * dt;
+    if (moonFootprintTravel >= 0.68) {
+      moonFootprintTravel %= 0.68;
+      spawnMoonFootprint(footNormal, footHeading, moonFootprintSide);
+      moonFootprintSide *= -1;
+    }
+  } else if (currentWorld !== 'moon') {
+    moonFootprintTravel = 0;
+  }
 
   const walkAmount = THREE.MathUtils.clamp(Math.abs(footSpeed) / 4.8, 0, 1);
   const stride = Math.sin(time * (5.6 + walkAmount * 3.2)) * walkAmount;
@@ -2277,7 +6548,8 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     arm.upper.rotation.z = THREE.MathUtils.damp(arm.upper.rotation.z, side * -0.1, 8, dt);
     arm.fore.rotation.x = THREE.MathUtils.damp(arm.fore.rotation.x, 0.12, 8, dt);
   });
-  alienDriver.alien.rotation.z = -steeringInput * 0.06 + Math.sin(time * 2.1) * 0.012;
+  alienDriver.alien.rotation.z = -steeringInput * 0.06 + Math.sin(time * 2.1) * 0.012
+    + (footThrusterActive ? Math.sin(time * 71) * 0.022 : 0);
   alienDriver.body.scale.y = 1 + Math.sin(time * 1.8) * 0.018;
 }
 
@@ -2295,9 +6567,31 @@ function updateTravelPrompt() {
     }
     return;
   }
+  if (travelMode === 'hyperbike') {
+    if (hyperBikeTransit) {
+      const eta = Math.max(0, Math.ceil(hyperBikeTransit.duration - hyperBikeTransit.elapsed));
+      setInteractionPrompt(`VOLT BIKE HYPERSPEED TO ${hyperBikeTransit.to.toUpperCase()} · ${eta} SEC`);
+    } else {
+      setInteractionPrompt(`E · DISEMBARK ${hyperBikeLocation.toUpperCase()}`);
+    }
+    return;
+  }
+  if (isNearHyperBike(footNormal)) {
+    const destination = hyperBikeLocation === 'moon' ? 'ZEPHYRA' : 'MOON';
+    setInteractionPrompt(`E · RIDE VOLT BIKE TO ${destination}`);
+    return;
+  }
+  if (currentWorld === 'zephyra') {
+    setInteractionPrompt('WASD · EXPLORE ZEPHYRA  /  FIND VOLT BIKE TO RETURN');
+    return;
+  }
   const padNormal = currentWorld === 'moon' ? MOON_PAD_NORMAL : MARS_PORT.normal;
   const nearPad = arcDistanceForWorld(currentWorld, footNormal, padNormal) < SHUTTLE_BOARD_RADIUS;
-  if (!shuttleTransit && shuttleLocation === currentWorld && nearPad) {
+  if (currentWorld === 'moon' && isNearMoonFriend(footNormal)) {
+    setInteractionPrompt(`E · SAY HELLO TO LUMI · ${moonFriendMood}`);
+  } else if (currentWorld === 'moon' && isNearMoonCommand(footNormal)) {
+    setInteractionPrompt(`E · ${moonCommandSystemsActive ? 'SET LUNA COMMAND STANDBY' : 'ACTIVATE LUNA COMMAND'}`);
+  } else if (!shuttleTransit && shuttleLocation === currentWorld && nearPad) {
     setInteractionPrompt(`E · BOARD SPACE BUS · LEAVES ${Math.max(1, Math.ceil(shuttleDockTimer))} SEC`);
   } else if (nearPad) {
     setInteractionPrompt(`SPACE BUS RETURNS · ${Math.max(1, Math.ceil(shuttleEtaToWorld(currentWorld)))} SEC`);
@@ -2311,6 +6605,7 @@ function updateTravelPrompt() {
 /* ---------- camera state ---------- */
 
 const camLookTarget = alien.position.clone();
+const interiorCameraSide = new THREE.Vector3();
 camera.position.copy(alien.position).addScaledVector(playerNormal, 18).addScaledVector(playerHeading, -16);
 camera.up.copy(playerNormal);
 
@@ -2370,6 +6665,242 @@ function updateWheelDust(dt) {
   wheelDustGeometry.attributes.position.needsUpdate = true;
 }
 
+/* ---------- persistent lunar bootprints & ballistic regolith ---------- */
+
+function makeMoonFootprintTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 192;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.beginPath();
+  ctx.ellipse(64, 145, 25, 30, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(38, 52, 52, 90);
+  ctx.beginPath();
+  ctx.ellipse(64, 54, 27, 25, 0, 0, Math.PI * 2);
+  ctx.fill();
+  [39, 64, 89].forEach((x, index) => {
+    ctx.beginPath();
+    ctx.ellipse(x, 25 + Math.abs(index - 1) * 4, 12, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.globalAlpha = 0.62;
+  for (let y = 67; y < 143; y += 19) {
+    ctx.fillRect(42, y, 18, 6);
+    ctx.fillRect(68, y + 6, 18, 6);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+const moonFootprintLimit = isTouchDevice ? 90 : 180;
+const moonFootprintGeometry = new THREE.PlaneGeometry(0.46, 0.78);
+moonFootprintGeometry.rotateX(-Math.PI / 2);
+const moonFootprints = new THREE.InstancedMesh(
+  moonFootprintGeometry,
+  new THREE.MeshBasicMaterial({
+    map: makeMoonFootprintTexture(),
+    color: 0x222128,
+    transparent: true,
+    opacity: 0.52,
+    alphaTest: 0.06,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  }),
+  moonFootprintLimit
+);
+moonFootprints.name = 'Persistent lunar bootprint trail';
+moonFootprints.count = 0;
+scene.add(moonFootprints);
+const moonFootprintDummy = new THREE.Object3D();
+const moonFootprintRight = new THREE.Vector3();
+const moonFootprintNormal = new THREE.Vector3();
+const moonFootprintHeading = new THREE.Vector3();
+const moonFootprintBack = new THREE.Vector3();
+const moonFootprintMatrix = new THREE.Matrix4();
+let moonFootprintWriteIndex = 0;
+let moonFootprintTravel = 0;
+let moonFootprintSide = -1;
+
+const moonFootDustCount = isTouchDevice ? 42 : 82;
+const moonFootDustPositions = new Float32Array(moonFootDustCount * 3);
+const moonFootDustVelocities = Array.from({ length: moonFootDustCount }, () => new THREE.Vector3());
+const moonFootDustLife = new Float32Array(moonFootDustCount);
+const moonFootDustGeometry = new THREE.BufferGeometry();
+moonFootDustGeometry.setAttribute('position', new THREE.BufferAttribute(moonFootDustPositions, 3));
+const moonFootDust = new THREE.Points(
+  moonFootDustGeometry,
+  new THREE.PointsMaterial({
+    color: 0xc8c2bd,
+    size: 0.17,
+    transparent: true,
+    opacity: 0.58,
+    depthWrite: false,
+  })
+);
+moonFootDust.name = 'Ballistic lunar regolith grains';
+scene.add(moonFootDust);
+let moonFootDustWriteIndex = 0;
+const moonFootDustGravity = new THREE.Vector3();
+const moonFootDustSurfaceNormal = new THREE.Vector3();
+
+function spawnMoonFootprint(normal, heading, side) {
+  moonFootprintRight.copy(heading).cross(normal).normalize();
+  moonFootprintNormal.copy(stepWorldNormal(normal, moonFootprintRight, side * 0.18, MOON_RADIUS));
+  moonFootprintHeading.copy(heading)
+    .addScaledVector(moonFootprintNormal, -heading.dot(moonFootprintNormal))
+    .normalize();
+  moonFootprintRight.copy(moonFootprintHeading).cross(moonFootprintNormal).normalize();
+  moonFootprintBack.copy(moonFootprintHeading).multiplyScalar(-1);
+  moonFootprintMatrix.makeBasis(moonFootprintRight, moonFootprintNormal, moonFootprintBack);
+  moonFootprintDummy.position.copy(MOON_CENTER).addScaledVector(moonFootprintNormal, MOON_RADIUS + getMoonHeight(moonFootprintNormal) + 0.026);
+  moonFootprintDummy.quaternion.setFromRotationMatrix(moonFootprintMatrix);
+  moonFootprintDummy.rotateY(side * 0.055);
+  moonFootprintDummy.scale.set(0.92 + Math.random() * 0.12, 1, 0.94 + Math.random() * 0.1);
+  moonFootprintDummy.updateMatrix();
+  const index = moonFootprintWriteIndex++ % moonFootprintLimit;
+  moonFootprints.setMatrixAt(index, moonFootprintDummy.matrix);
+  moonFootprints.count = Math.min(moonFootprintLimit, Math.max(moonFootprints.count, index + 1));
+  moonFootprints.instanceMatrix.needsUpdate = true;
+
+  for (let grain = 0; grain < 4; grain++) {
+    const dustIndex = moonFootDustWriteIndex++ % moonFootDustCount;
+    const position = moonFootprintDummy.position.clone()
+      .addScaledVector(moonFootprintRight, (Math.random() - 0.5) * 0.32)
+      .addScaledVector(moonFootprintHeading, (Math.random() - 0.5) * 0.24);
+    moonFootDustPositions[dustIndex * 3] = position.x;
+    moonFootDustPositions[dustIndex * 3 + 1] = position.y;
+    moonFootDustPositions[dustIndex * 3 + 2] = position.z;
+    moonFootDustVelocities[dustIndex].copy(moonFootprintNormal).multiplyScalar(0.22 + Math.random() * 0.5)
+      .addScaledVector(moonFootprintHeading, -0.12 - Math.random() * 0.28)
+      .addScaledVector(moonFootprintRight, (Math.random() - 0.5) * 0.34);
+    moonFootDustLife[dustIndex] = 0.42 + Math.random() * 0.46;
+  }
+  moonFootDustGeometry.attributes.position.needsUpdate = true;
+}
+
+function updateMoonFootDust(dt) {
+  for (let index = 0; index < moonFootDustCount; index++) {
+    if (moonFootDustLife[index] <= 0) continue;
+    const offset = index * 3;
+    moonFootDustGravity.set(
+      moonFootDustPositions[offset],
+      moonFootDustPositions[offset + 1],
+      moonFootDustPositions[offset + 2]
+    );
+    moonFootDustGravity.sub(MOON_CENTER).normalize().multiplyScalar(-1.62 * dt);
+    moonFootDustVelocities[index].add(moonFootDustGravity);
+    moonFootDustPositions[offset] += moonFootDustVelocities[index].x * dt;
+    moonFootDustPositions[offset + 1] += moonFootDustVelocities[index].y * dt;
+    moonFootDustPositions[offset + 2] += moonFootDustVelocities[index].z * dt;
+    moonFootDustLife[index] -= dt;
+    moonFootDustSurfaceNormal.set(
+      moonFootDustPositions[offset] - MOON_CENTER.x,
+      moonFootDustPositions[offset + 1] - MOON_CENTER.y,
+      moonFootDustPositions[offset + 2] - MOON_CENTER.z
+    );
+    const radialDistance = moonFootDustSurfaceNormal.length();
+    moonFootDustSurfaceNormal.normalize();
+    const surfaceRadius = MOON_RADIUS + getMoonHeight(moonFootDustSurfaceNormal);
+    if (moonFootDustLife[index] <= 0 || radialDistance <= surfaceRadius + 0.015) {
+      moonFootDustLife[index] = 0;
+      moonFootDustPositions[offset] = 0;
+      moonFootDustPositions[offset + 1] = 0;
+      moonFootDustPositions[offset + 2] = 0;
+    }
+  }
+  moonFootDustGeometry.attributes.position.needsUpdate = true;
+}
+
+function configureLunarShadows(root, { cast = true, receive = true } = {}) {
+  root?.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    const opaqueLitSurface = materials.some((material) => (
+      material?.isMeshStandardMaterial
+      && (!material.transparent || material.opacity >= 0.82)
+    ));
+    if (!opaqueLitSurface) return;
+    if (!child.geometry.boundingSphere) child.geometry.computeBoundingSphere();
+    const radius = child.geometry.boundingSphere?.radius ?? 0;
+    child.receiveShadow = receive;
+    child.castShadow = cast && radius >= 0.26 && !child.name.toLowerCase().includes('floor');
+  });
+}
+
+moonSurface.castShadow = true;
+moonSurface.receiveShadow = true;
+configureLunarShadows(moonRegolithGeology.group);
+configureLunarShadows(moonColdTrapRuntime.group);
+moonColdTrapRuntime.ejecta.castShadow = false;
+configureLunarShadows(moonRayedCraterRuntime.group);
+moonRayedCraterRuntime.rayFragments.castShadow = false;
+configureLunarShadows(moonLandingPad.group);
+configureLunarShadows(moonBikeLandingPad.group);
+configureLunarShadows(moonCommandRuntime.group);
+configureLunarShadows(moonFriendRuntime.root, { receive: false });
+configureLunarShadows(moonShuttle, { receive: false });
+configureLunarShadows(hyperBike, { receive: false });
+configureLunarShadows(alienDriver.alien, { receive: false });
+
+const moonLightingFocus = MOON_PAD_POSITION.clone();
+const moonLightDesiredFocus = new THREE.Vector3();
+
+function lunarTransitPresence(transit) {
+  if (!transit) return 0;
+  const progress = THREE.MathUtils.clamp(transit.elapsed / transit.duration, 0, 1);
+  return transit.from === 'moon'
+    ? 1 - THREE.MathUtils.smoothstep(progress, 0.06, 0.42)
+    : transit.to === 'moon'
+      ? THREE.MathUtils.smoothstep(progress, 0.58, 0.94)
+      : 0;
+}
+
+function updateLunarLighting(dt, time) {
+  let targetBlend = 0;
+  if (travelMode === 'walking') targetBlend = currentWorld === 'moon' ? 1 : 0;
+  else if (travelMode === 'boarded') targetBlend = shuttleTransit ? lunarTransitPresence(shuttleTransit) : shuttleLocation === 'moon' ? 1 : 0;
+  else if (travelMode === 'hyperbike') targetBlend = hyperBikeTransit ? lunarTransitPresence(hyperBikeTransit) : hyperBikeLocation === 'moon' ? 1 : 0;
+
+  moonLightingBlend = THREE.MathUtils.damp(moonLightingBlend, targetBlend, 3.2, dt);
+  moonSunLight.intensity = moonLightingBlend * 2.65;
+  moonSunLight.visible = moonLightingBlend > 0.004;
+  moonBounceLight.intensity = moonLightingBlend * 0.2;
+  moonEarthLight.intensity = moonLightingBlend * 0.14;
+  hemisphereLight.intensity = THREE.MathUtils.lerp(0.85, 0.1, moonLightingBlend);
+  sunLight.intensity = THREE.MathUtils.lerp(1.8, 0.08, moonLightingBlend);
+  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.025, moonLightingBlend);
+  moonSurface.material.emissiveIntensity = THREE.MathUtils.lerp(0.22, 0.025, moonLightingBlend);
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(renderer.toneMappingExposure, 0.98, moonLightingBlend);
+
+  const earthVisibility = THREE.MathUtils.smoothstep(moonLightingBlend, 0.015, 0.48);
+  earthriseRuntime.group.visible = earthVisibility > 0.004;
+  earthriseRuntime.surfaceMaterial.opacity = earthVisibility;
+  earthriseRuntime.cloudMaterial.opacity = earthVisibility * 0.72;
+  earthriseRuntime.atmosphereMaterial.uniforms.uOpacity.value = earthVisibility;
+  earthriseRuntime.spinRoot.rotation.y = 0.62 + time * 0.012;
+  earthriseRuntime.clouds.rotation.y = time * 0.006;
+
+  if (!moonSunLight.visible) return;
+  if (travelMode === 'walking' && currentWorld === 'moon') moonLightDesiredFocus.copy(footRoot.position);
+  else if (travelMode === 'boarded' && !shuttleTransit && shuttleLocation === 'moon') moonLightDesiredFocus.copy(moonShuttle.position);
+  else if (travelMode === 'hyperbike' && !hyperBikeTransit && hyperBikeLocation === 'moon') moonLightDesiredFocus.copy(hyperBike.position);
+  else moonLightDesiredFocus.copy(MOON_PAD_POSITION);
+
+  moonLightingFocus.lerp(moonLightDesiredFocus, 1 - Math.exp(-dt * 4.5));
+  moonSunTarget.position.copy(moonLightingFocus);
+  moonSunLight.position.copy(moonLightingFocus).addScaledVector(moonSolarDirection, 72);
+  moonEarthLightTarget.position.copy(moonLightingFocus);
+  moonEarthLight.position.copy(earthriseRuntime.group.position);
+}
+
 /* ---------- animation loop ---------- */
 
 const forwardVec = new THREE.Vector3();
@@ -2409,6 +6940,7 @@ function animate() {
   const thrusterHeld = Boolean(keys[' '] || keys.space || keys.spacebar);
   handleInteraction();
   updateShuttleFlight(dt, t);
+  updateHyperBikeTravel(dt, t);
 
   if (travelMode === 'driving') {
     const targetSpeed = throttleInput > 0 ? maxForwardSpeed : throttleInput < 0 ? -maxReverseSpeed : 0;
@@ -2439,29 +6971,51 @@ function animate() {
     }
 
     if (jumpQueued && grounded) {
-      verticalVelocity = 9.4;
+      verticalVelocity = 0.8;
       grounded = false;
       roverThrusterFuel = ROVER_THRUSTER_FUEL_MAX;
-      roverThrusterBurstTime = 0.86;
-      showBanner('G-ROVER HIGH THRUST · HOLD SPACE TO CLIMB');
+      roverLiftSpool = Math.max(roverLiftSpool, 0.18);
+      showBanner('G-ROVER LIFT FANS SPOOLING · RELEASE TO DROP');
     }
     jumpQueued = false;
-    roverThrusterBurstTime = Math.max(0, roverThrusterBurstTime - dt);
-    const roverThrusterActive = !grounded && (roverThrusterBurstTime > 0 || thrusterHeld) && roverThrusterFuel > 0;
-    roverThrusters.visible = roverThrusterActive;
+    const roverThrusterRequested = !grounded && thrusterHeld && roverThrusterFuel > 0;
+    roverLiftSpool = THREE.MathUtils.clamp(
+      roverLiftSpool + (roverThrusterRequested ? ROVER_LIFT_SPOOL_UP : -ROVER_LIFT_SPOOL_DOWN) * dt,
+      0,
+      1
+    );
+    const roverThrusterActive = roverThrusterRequested && roverLiftSpool > 0.015;
+    const roverThrusterPulse = roverThrusterActive
+      ? (Math.sin(t * 29.5) > -0.12 ? 1 : 0.14) * (Math.sin(t * 67) > 0.25 ? 1 : 0.74)
+      : 0;
+    if (roverThrusterWasActive && !roverThrusterRequested && !grounded) {
+      verticalVelocity = Math.min(verticalVelocity, -2.8);
+      if (jumpHeight > 0.9) showBanner('THRUST CUT · HARD DROP');
+    }
+    roverThrusterWasActive = roverThrusterRequested;
+    roverThrusters.visible = roverLiftSpool > 0.025;
     if (roverThrusterActive) {
       roverThrusterFuel = Math.max(0, roverThrusterFuel - dt);
-      verticalVelocity = THREE.MathUtils.damp(verticalVelocity, 6.2, 3.2, dt);
-      roverThrusters.scale.y = 0.8 + Math.sin(t * 31) * 0.16;
+      const hoverError = THREE.MathUtils.clamp((ROVER_HOVER_HEIGHT - jumpHeight) / ROVER_HOVER_HEIGHT, -0.65, 1);
+      const liftCommand = THREE.MathUtils.clamp(0.18 + hoverError * 0.72 - verticalVelocity * 0.07, 0, 1);
+      const groundEffect = 1 + Math.max(0, 1 - jumpHeight / 5) * 0.28;
+      const fanTurbulence = Math.sin(t * 41) * 0.25 + Math.sin(t * 73) * 0.14;
+      const pulseEfficiency = 0.78 + roverThrusterPulse * 0.22;
+      const liftAcceleration = ROVER_MAX_LIFT_ACCELERATION * liftCommand * groundEffect * roverLiftSpool * pulseEfficiency + fanTurbulence;
+      verticalVelocity = Math.min(11.5, verticalVelocity + liftAcceleration * dt);
+      roverThrusters.scale.y = (0.3 + roverThrusterPulse * 0.82) * (0.45 + roverLiftSpool * 0.55);
+      if (jumpHeight < 6) spawnWheelDust(dt * 1.8, 8 + roverThrusterPulse * 6);
     }
+    updateThrusterAudio(roverLiftSpool > 0.015, true, roverThrusterPulse * roverLiftSpool);
     if (!grounded) {
-      verticalVelocity += (roverThrusterActive ? -0.14 : marsGravity) * dt;
+      verticalVelocity += marsGravity * dt;
       jumpHeight += verticalVelocity * dt;
       if (jumpHeight <= 0) {
         jumpHeight = 0;
         verticalVelocity = 0;
         grounded = true;
-        roverThrusterBurstTime = 0;
+        roverThrusterWasActive = false;
+        roverLiftSpool = 0;
         roverThrusters.visible = false;
         roverChassis.position.y = 0.16;
       }
@@ -2473,14 +7027,19 @@ function animate() {
     const rearHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, -1.45));
     const rightHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, 1.25));
     const leftHeight = getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, -1.25));
-    const targetPitch = grounded ? Math.atan2(frontHeight - rearHeight, 2.9) : -verticalVelocity * 0.018;
-    const targetRoll = grounded ? Math.atan2(rightHeight - leftHeight, 2.5) - steeringInput * driveSpeed * 0.0045 : 0;
+    const targetPitch = grounded ? Math.atan2(frontHeight - rearHeight, 2.9) : -verticalVelocity * 0.018 + (roverThrusterActive ? Math.sin(t * 57) * 0.012 : 0);
+    const targetRoll = grounded
+      ? Math.atan2(rightHeight - leftHeight, 2.5) - steeringInput * driveSpeed * 0.0045
+      : roverThrusterActive ? Math.sin(t * 48) * 0.034 + Math.sin(t * 21) * 0.012 : 0;
     roverChassis.rotation.x = THREE.MathUtils.damp(roverChassis.rotation.x, targetPitch, 7, dt);
     roverChassis.rotation.z = THREE.MathUtils.damp(roverChassis.rotation.z, targetRoll, 7, dt);
 
     suspensionPhase += Math.abs(driveSpeed) * dt * 1.8;
     const roadBuzz = grounded ? Math.sin(suspensionPhase) * Math.min(0.055, Math.abs(driveSpeed) * 0.004) : 0;
-    roverChassis.position.y = THREE.MathUtils.damp(roverChassis.position.y, roadBuzz, grounded ? 9 : 3, dt);
+    const fanBuzz = roverLiftSpool > 0.015
+      ? (Math.sin(t * 55) * 0.025 + Math.sin(t * 91) * 0.012) * roverLiftSpool
+      : 0;
+    roverChassis.position.y = THREE.MathUtils.damp(roverChassis.position.y, roadBuzz + fanBuzz, grounded ? 9 : 8, dt);
 
     rightVec.copy(playerHeading).cross(playerNormal).normalize();
     backVec.copy(playerHeading).multiplyScalar(-1);
@@ -2510,16 +7069,36 @@ function animate() {
     driveSpeed = THREE.MathUtils.damp(driveSpeed, 0, 8, dt);
     updateRoverAudio(0, 0);
     jumpQueued = false;
+    updateThrusterAudio(false, false, 0);
     roverThrusters.visible = false;
     alienDriver.thrusterFlames.visible = false;
     alienDriver.body.scale.y = 1 + Math.sin(t * 1.35) * 0.012;
   }
 
   updateWheelDust(dt);
+  updateMoonFootDust(dt);
 
   const activeMarsNormal = travelMode === 'driving' ? playerNormal : travelMode === 'walking' && currentWorld === 'mars' ? footNormal : null;
   const activeMarsHeading = travelMode === 'driving' ? playerHeading : travelMode === 'walking' && currentWorld === 'mars' ? footHeading : null;
+  const activeMarsAltitude = travelMode === 'driving' ? jumpHeight : travelMode === 'walking' && currentWorld === 'mars' ? footJumpHeight : 0;
+  const activeMoonNormal = travelMode === 'walking' && currentWorld === 'moon' ? footNormal : null;
+  const activeZephyraNormal = travelMode === 'walking' && currentWorld === 'zephyra' ? footNormal : null;
   updateSpeakerStations(t, activeMarsNormal, activeMarsHeading);
+  updateCaveAtmosphere(dt, activeMarsNormal, activeMarsAltitude);
+  updateLunarLighting(dt, t);
+  updateMarsDustFront(dt, t, activeMarsNormal);
+  updateMarsSedimentaryEscarpment(dt, t, activeMarsNormal);
+  updateMarsYardangField(dt, t, activeMarsNormal);
+  updateMarsImpactBasin(dt, t, activeMarsNormal);
+  updateMoonCommandCenter(dt, t, activeMoonNormal);
+  updateMoonFriend(dt, t, activeMoonNormal);
+  updateMoonColdTrap(dt, t, activeMoonNormal);
+  updateMoonRayedCrater(dt, t, activeMoonNormal);
+  updateZephyraStorm(dt, t, activeZephyraNormal);
+  updateZephyraIonCanyon(dt, t, activeZephyraNormal);
+  updateZephyraFluxWell(dt, t, activeZephyraNormal);
+  updateZephyraAuroralSquall(dt, t, activeZephyraNormal);
+  updateZephyraPiezoelectricGrove(dt, t, activeZephyraNormal);
 
   if (activeMarsNormal) for (const hub of HUBS) {
     if (!hub.discovered && geodesicDistance(activeMarsNormal, hub.normal) < hub.trigger) {
@@ -2534,6 +7113,39 @@ function animate() {
   const contactHub = HUBS.find((h) => h.key === CONTACT_HUB_KEY);
   const nearContact = activeMarsNormal && geodesicDistance(activeMarsNormal, contactHub.normal) < CONTACT_REVEAL_RADIUS;
   contactPanelEl.classList.toggle('show', nearContact);
+
+  const downedUfo = hubRuntime.outpost;
+  downedUfo.rimLights.forEach((light, index) => {
+    const flicker = light.damaged
+      ? (Math.sin(t * (17 + index)) > 0.58 ? 1 : 0.03)
+      : 0.72 + Math.sin(t * 2.4 + light.phase) * 0.28;
+    light.material.emissiveIntensity = 0.12 + flicker * 1.85;
+  });
+  downedUfo.interiorLight.intensity = 2.5 + Math.sin(t * 12.7) * 0.85 + Math.sin(t * 31) * 0.28;
+  downedUfo.breachGlow.material.opacity = 0.54 + Math.sin(t * 8.4) * 0.18;
+  const ufoSmokePositions = downedUfo.smoke.geometry.attributes.position;
+  for (let i = 0; i < downedUfo.smokeSpeeds.length; i++) {
+    const baseIndex = i * 3;
+    ufoSmokePositions.array[baseIndex] += dt * 0.055;
+    ufoSmokePositions.array[baseIndex + 1] += dt * downedUfo.smokeSpeeds[i];
+    if (ufoSmokePositions.array[baseIndex + 1] - downedUfo.smokeBases[baseIndex + 1] > 4.8) {
+      ufoSmokePositions.array[baseIndex] = downedUfo.smokeBases[baseIndex];
+      ufoSmokePositions.array[baseIndex + 1] = downedUfo.smokeBases[baseIndex + 1];
+      ufoSmokePositions.array[baseIndex + 2] = downedUfo.smokeBases[baseIndex + 2];
+    }
+  }
+  ufoSmokePositions.needsUpdate = true;
+  downedUfo.sparks.forEach((spark, index) => {
+    const sparkAge = (t * (0.78 + index * 0.035) + spark.phase) % 1;
+    const burst = Math.max(0, Math.sin(t * 10.5 + spark.phase));
+    spark.mesh.visible = burst > 0.43;
+    spark.mesh.position.set(
+      4.72 + Math.sin(spark.phase) * spark.radius * sparkAge,
+      1.38 + sparkAge * 2.45,
+      1.3 + Math.cos(spark.phase) * spark.radius * sparkAge
+    );
+    spark.mesh.scale.setScalar(0.45 + burst * 1.35);
+  });
 
   const cavern = hubRuntime.cavern;
   cavern.crystalMaterials.forEach((mat, i) => {
@@ -2550,10 +7162,17 @@ function animate() {
   }
   sp.needsUpdate = true;
 
+  hubRuntime.nightfall.caveAccentLights.forEach((light, index) => {
+    light.intensity = 1.15 + Math.sin(t * 3.4 + index * 1.7) * 0.22;
+  });
+
   airborneDust.rotation.y += dt * 0.014;
   airborneDust.rotation.z += dt * 0.003;
+  updateAeolianSaltation(t);
   marsLandingPad.glowMaterial.emissiveIntensity = 1.05 + Math.sin(t * 2.2) * 0.32;
   moonLandingPad.glowMaterial.emissiveIntensity = 0.9 + Math.sin(t * 1.7 + 1.3) * 0.26;
+  moonBikeLandingPad.glowMaterial.emissiveIntensity = 1.15 + Math.sin(t * 3.1) * 0.38;
+  zephyraBikeLandingPad.glowMaterial.emissiveIntensity = 1.1 + Math.sin(t * 2.8 + 1.2) * 0.34;
 
   dustDevils.forEach((devil) => {
     const positions = devil.points.geometry.attributes.position;
@@ -2577,17 +7196,46 @@ function animate() {
   let desiredTarget;
   let desiredCameraUp;
   if (travelMode === 'driving') {
+    const cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 15 : 20, lookingAtCamera ? 5.2 : 5.5, caveDarkness);
+    const cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 13 : -18, lookingAtCamera ? 8 : -9.5, caveDarkness);
+    const targetHeight = THREE.MathUtils.lerp(2.2, 1.8, caveDarkness);
+    const targetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 3.2, lookingAtCamera ? 0 : 2.5, caveDarkness);
     desiredCamPos = alien.position.clone()
-      .addScaledVector(playerNormal, lookingAtCamera ? 15 : 20)
-      .addScaledVector(playerHeading, lookingAtCamera ? 13 : -18);
-    desiredTarget = alien.position.clone().addScaledVector(playerNormal, 2.2).addScaledVector(playerHeading, lookingAtCamera ? 0 : 3.2);
+      .addScaledVector(playerNormal, cameraHeight)
+      .addScaledVector(playerHeading, cameraTrail);
+    desiredTarget = alien.position.clone().addScaledVector(playerNormal, targetHeight).addScaledVector(playerHeading, targetLead);
     desiredCameraUp = playerNormal;
   } else if (travelMode === 'walking') {
+    const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
+    let cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 8.5 : 10.5, lookingAtCamera ? 4.3 : 4.6, interiorCameraBlend);
+    let cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 8 : -11, lookingAtCamera ? 6.2 : -7.5, interiorCameraBlend);
+    cameraHeight = THREE.MathUtils.lerp(cameraHeight, lookingAtCamera ? 4.7 : 4.65, moonCommandInterior);
+    cameraTrail = THREE.MathUtils.lerp(cameraTrail, lookingAtCamera ? 4.2 : -2.8, moonCommandInterior);
+    const commandTargetHeight = THREE.MathUtils.lerp(2.2, 2.5, moonCommandInterior);
+    const commandTargetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 2.2, lookingAtCamera ? 0 : 2.8, moonCommandInterior);
     desiredCamPos = footRoot.position.clone()
-      .addScaledVector(footNormal, lookingAtCamera ? 8.5 : 10.5)
-      .addScaledVector(footHeading, lookingAtCamera ? 8 : -11);
-    desiredTarget = footRoot.position.clone().addScaledVector(footNormal, 2.2).addScaledVector(footHeading, lookingAtCamera ? 0 : 2.2);
+      .addScaledVector(footNormal, cameraHeight)
+      .addScaledVector(footHeading, cameraTrail);
+    if (!lookingAtCamera && moonCommandInterior > 0.01) {
+      interiorCameraSide.copy(footHeading).cross(footNormal).normalize();
+      desiredCamPos.addScaledVector(interiorCameraSide, moonCommandInterior * 2.35);
+    }
+    desiredTarget = footRoot.position.clone().addScaledVector(footNormal, commandTargetHeight).addScaledVector(footHeading, commandTargetLead);
     desiredCameraUp = footNormal;
+  } else if (travelMode === 'hyperbike') {
+    if (hyperBikeTransit) {
+      desiredCamPos = hyperBike.position.clone()
+        .addScaledVector(hyperBikeFlightDirection, -19)
+        .addScaledVector(hyperBikeFlightUp, 8.5);
+      desiredTarget = hyperBike.position.clone().addScaledVector(hyperBikeFlightDirection, 5.5);
+      desiredCameraUp = hyperBikeFlightUp;
+    } else {
+      const dockNormal = hyperBikeDockNormal(hyperBikeLocation);
+      const dockHeading = hyperBikeLocation === 'zephyra' ? ZEPHYRA_BIKE_HEADING : MOON_BIKE_HEADING;
+      desiredCamPos = hyperBike.position.clone().addScaledVector(dockNormal, 7.5).addScaledVector(dockHeading, -12);
+      desiredTarget = hyperBike.position.clone().addScaledVector(dockNormal, 2.1);
+      desiredCameraUp = dockNormal;
+    }
   } else {
     if (shuttleTransit) {
       desiredCamPos = moonShuttle.position.clone().addScaledVector(shuttleFlightDirection, -28).addScaledVector(UP, 32);
@@ -2601,31 +7249,76 @@ function animate() {
       desiredCameraUp = dockNormal;
     }
   }
-  camera.position.lerp(desiredCamPos, 1 - Math.exp(-dt * (travelMode === 'boarded' ? 3.4 : 5.2)));
+  camera.position.lerp(desiredCamPos, 1 - Math.exp(-dt * (travelMode === 'boarded' || travelMode === 'hyperbike' ? 3.4 : 5.2)));
   camera.up.lerp(desiredCameraUp, 1 - Math.exp(-dt * 7)).normalize();
   camLookTarget.lerp(desiredTarget, 1 - Math.exp(-dt * 8));
   camera.lookAt(camLookTarget);
 
-  const displayedSpeed = travelMode === 'driving' ? Math.abs(driveSpeed) * 3.6 : travelMode === 'walking' ? Math.abs(footSpeed) * 3.6 : shuttleDisplaySpeed;
+  const displayedSpeed = travelMode === 'driving'
+    ? Math.abs(driveSpeed) * 3.6
+    : travelMode === 'walking'
+      ? Math.abs(footSpeed) * 3.6
+      : travelMode === 'hyperbike' ? hyperBikeDisplaySpeed : shuttleDisplaySpeed;
   speedValueEl.textContent = Math.round(displayedSpeed).toString().padStart(2, '0');
   let elevation = 0;
   if (travelMode === 'driving') elevation = getSurfaceHeight(playerNormal) + jumpHeight;
-  else if (travelMode === 'walking') elevation = (currentWorld === 'mars' ? getSurfaceHeight(footNormal) : 0) + footJumpHeight;
+  else if (travelMode === 'walking') {
+    const surfaceHeight = currentWorld === 'mars'
+      ? getSurfaceHeight(footNormal)
+      : currentWorld === 'zephyra'
+        ? getZephyraHeight(footNormal)
+        : getMoonHeight(footNormal);
+    elevation = surfaceHeight + footJumpHeight;
+  }
   elevationValueEl.textContent = `${elevation >= 0 ? '+' : ''}${elevation.toFixed(1)}`;
 
-  if (travelMode === 'boarded' && shuttleTransit) {
+  if (travelMode === 'hyperbike' && hyperBikeTransit) {
+    locationLabelEl.textContent = `HYPERSPEED CORRIDOR · ${hyperBikeTransit.to.toUpperCase()}`;
+    gravityValueEl.textContent = '0.00 G';
+    controlsHintEl.textContent = 'VOLT BIKE AUTOPILOT · E trip status';
+  } else if (travelMode === 'boarded' && shuttleTransit) {
     locationLabelEl.textContent = 'ARES–LUNA TRANSIT';
     gravityValueEl.textContent = '0.00 G';
     controlsHintEl.textContent = 'SPACE BUS AUTOPILOT · E trip status';
   } else {
-    const locationWorld = travelMode === 'boarded' ? shuttleLocation : currentWorld;
-    locationLabelEl.textContent = locationWorld === 'moon' ? 'MOON SURFACE · LUNA 01' : 'MARS SURFACE · SOL 01';
-    gravityValueEl.textContent = locationWorld === 'moon' ? '0.16 G' : '0.38 G';
+    const locationWorld = travelMode === 'boarded' ? shuttleLocation : travelMode === 'hyperbike' ? hyperBikeLocation : currentWorld;
+    locationLabelEl.textContent = locationWorld === 'moon'
+      ? moonCommandInterior > 0.35
+        ? 'LUNA COMMAND CENTER · MOON'
+        : moonRayedCraterProximity > 0.55 && moonRayedCraterProximity >= moonColdTrapProximity
+          ? 'TYCHO MINOR · MOON'
+          : moonColdTrapProximity > 0.55 ? 'PSR-01 COLD TRAP · MOON' : 'MOON SURFACE · LUNA 01'
+      : locationWorld === 'zephyra'
+        ? zephyraGroveProximity > 0.55 && zephyraGroveProximity >= zephyraAuroraProximity && zephyraGroveProximity >= zephyraFluxProximity && zephyraGroveProximity >= zephyraCanyonProximity && zephyraGroveProximity >= zephyraStormProximity
+          ? 'PRISM GROVE · ZEPHYRA'
+          : zephyraAuroraProximity > 0.55 && zephyraAuroraProximity >= zephyraGroveProximity && zephyraAuroraProximity >= zephyraFluxProximity && zephyraAuroraProximity >= zephyraCanyonProximity && zephyraAuroraProximity >= zephyraStormProximity
+          ? 'ION VEIL · ZEPHYRA'
+          : zephyraFluxProximity > 0.55 && zephyraFluxProximity >= zephyraGroveProximity && zephyraFluxProximity >= zephyraCanyonProximity && zephyraFluxProximity >= zephyraStormProximity
+          ? 'FLUX WELL · ZEPHYRA'
+          : zephyraCanyonProximity > 0.55 && zephyraCanyonProximity >= zephyraGroveProximity && zephyraCanyonProximity >= zephyraStormProximity
+          ? 'ION GLASS CANYON · ZEPHYRA'
+          : zephyraStormProximity > 0.55 ? 'RESONANCE SPIRES · ZEPHYRA' : 'ZEPHYRA SURFACE · ELECTRIC HORIZON'
+        : marsImpactBasinProximity > 0.55 && marsImpactBasinProximity >= marsYardangProximity && marsImpactBasinProximity >= marsEscarpmentProximity
+          ? 'DAEDALIA IMPACT BASIN · MARS'
+          : marsYardangProximity > 0.55 && marsYardangProximity >= marsImpactBasinProximity && marsYardangProximity >= marsEscarpmentProximity
+            ? 'MEDUSAE YARDANGS · MARS'
+            : marsEscarpmentProximity > 0.55 && marsEscarpmentProximity >= marsImpactBasinProximity
+            ? 'ARABIA TERRACE · MARS'
+            : marsDustStormBlend > 0.55 && caveDarkness < 0.35
+              ? 'MARS DUST FRONT · LOW VISIBILITY'
+              : 'MARS SURFACE · SOL 01';
+    gravityValueEl.textContent = locationWorld === 'moon'
+      ? '0.16 G'
+      : locationWorld === 'zephyra'
+        ? `${THREE.MathUtils.lerp(0.52, 0.13, zephyraFluxProximity).toFixed(2)} G`
+        : '0.38 G';
     controlsHintEl.textContent = travelMode === 'driving'
-      ? 'WASD / ARROWS drive · HOLD SPACE high-thrust climb · E exit rover · F look back'
+      ? 'WASD / ARROWS drive · HOLD SPACE hover lift · E exit rover · F look back'
       : travelMode === 'walking'
-        ? 'WASD / ARROWS walk · HOLD SPACE jetpack climb · E enter / board · F look back'
-        : 'E disembark space bus';
+        ? moonCommandInterior > 0.35
+          ? 'WASD / ARROWS explore command · E operate consoles · F look back'
+          : 'WASD / ARROWS walk · HOLD SPACE jetpack climb · E enter / board · F look back'
+        : travelMode === 'hyperbike' ? 'E disembark Volt bike' : 'E disembark space bus';
   }
 
   if (shuttleTransit) {
@@ -2641,6 +7334,7 @@ function animate() {
     shuttleRouteBusEl.style.left = shuttleLocation === 'mars' ? '0%' : '100%';
     shuttleStatusEl.classList.toggle('urgent', remaining <= 3);
   }
+  shuttleStatusEl.classList.toggle('nearby', isPlayerNearLandedShuttle());
 
   updateTravelPrompt();
 

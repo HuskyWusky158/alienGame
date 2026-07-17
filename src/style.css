@@ -178,6 +178,18 @@ canvas {
   color: rgba(255, 240, 217, 0.5);
 }
 
+#audio-toggle:not(.audio-live)[aria-pressed="true"] {
+  border-color: rgba(111, 220, 255, 0.78);
+  color: #f3fbff;
+  background: rgba(12, 35, 56, 0.86);
+  box-shadow: 0 0 18px rgba(80, 204, 255, 0.24);
+  animation: audio-callout 1.45s ease-in-out infinite;
+}
+
+#audio-toggle:not(.audio-live)[aria-pressed="true"] strong {
+  color: #9eeaff;
+}
+
 #shuttle-status {
   position: fixed;
   top: 113px;
@@ -192,12 +204,98 @@ canvas {
   font-weight: 850;
   letter-spacing: 1.15px;
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-7px);
+  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0s linear 0.22s;
   z-index: 11;
+}
+
+#shuttle-status.nearby {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition-delay: 0s;
 }
 
 #shuttle-status.urgent {
   border-color: rgba(255, 117, 79, 0.72);
   box-shadow: 0 0 16px rgba(255, 91, 45, 0.18);
+}
+
+#moon-friend-status {
+  position: fixed;
+  right: 22px;
+  bottom: 26px;
+  width: min(270px, calc(100vw - 44px));
+  padding: 11px 13px 10px;
+  border: 1px solid rgba(111, 255, 222, 0.34);
+  border-radius: 7px;
+  color: #dffdf7;
+  background: linear-gradient(135deg, rgba(6, 30, 37, 0.82), rgba(10, 17, 37, 0.76));
+  box-shadow: 0 0 26px rgba(74, 236, 204, 0.09);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition: opacity 0.32s ease, transform 0.32s ease, visibility 0s linear 0.32s;
+  pointer-events: none;
+  z-index: 12;
+}
+
+#moon-friend-status.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.moon-friend-kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: rgba(169, 255, 237, 0.72);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 1.3px;
+}
+
+.moon-friend-kicker i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #74f6d4;
+  box-shadow: 0 0 11px rgba(116, 246, 212, 0.95);
+  animation: friend-thinking 1.8s ease-in-out infinite;
+}
+
+#moon-friend-status strong {
+  display: block;
+  overflow: hidden;
+  margin-bottom: 6px;
+  color: #f1fffb;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#moon-friend-status small {
+  color: rgba(211, 239, 246, 0.52);
+  font-size: 7px;
+  font-weight: 750;
+  letter-spacing: 0.9px;
+}
+
+#moon-friend-status small b {
+  color: #8ff6df;
+  font-weight: 900;
+}
+
+@keyframes friend-thinking {
+  50% { opacity: 0.35; transform: scale(0.72); }
 }
 
 .shuttle-route {
@@ -269,6 +367,11 @@ canvas {
     opacity: 0.35;
     transform: scale(0.72);
   }
+}
+
+@keyframes audio-callout {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 14px rgba(80, 204, 255, 0.18); }
+  50% { transform: scale(1.045); box-shadow: 0 0 25px rgba(80, 204, 255, 0.42); }
 }
 
 #banner {
@@ -589,6 +692,13 @@ body.touch-device #controls-hint {
     right: 10px;
     padding: 6px 8px;
     font-size: 7px;
+  }
+
+  #moon-friend-status {
+    right: 10px;
+    bottom: 200px;
+    width: min(238px, calc(100vw - 20px));
+    padding: 8px 10px;
   }
 
   .telemetry-cell {

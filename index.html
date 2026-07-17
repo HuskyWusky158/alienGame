@@ -11,7 +11,7 @@
     <div id="hud">
       <div class="mission-chip"><span class="live-dot"></span><span id="location-label">MARS SURFACE &middot; SOL 01</span></div>
       <div id="hub-list"></div>
-      <div id="controls-hint">WASD / ARROWS move &middot; HOLD SPACE high-thrust climb &middot; E exit / board &middot; F look back</div>
+      <div id="controls-hint">WASD / ARROWS move &middot; HOLD SPACE hover lift &middot; E exit / board &middot; F look back</div>
     </div>
 
     <div id="telemetry" aria-label="Rover telemetry">
@@ -22,7 +22,7 @@
 
     <button id="audio-toggle" type="button" aria-label="Start Mars soundscape" aria-pressed="true">
       <span class="audio-pulse" aria-hidden="true"></span>
-      AUDIO <strong id="audio-state">START</strong>
+      AUDIO <strong id="audio-state">TAP TO START</strong>
     </button>
     <div id="shuttle-status" aria-live="polite">
       <span id="shuttle-status-text">SPACE BUS · MARS 10 SEC</span>
@@ -31,6 +31,11 @@
         <span class="shuttle-route-line"><i id="shuttle-route-bus"></i></span>
         <span>MOON</span>
       </div>
+    </div>
+    <div id="moon-friend-status" aria-live="polite">
+      <span class="moon-friend-kicker"><i></i>LUMI · AUTONOMOUS MOON FRIEND</span>
+      <strong id="moon-friend-activity">EXPLORING THE MOON</strong>
+      <small>MOOD <b id="moon-friend-mood">CURIOUS</b> · DECISION <b id="moon-friend-decisions">001</b></small>
     </div>
 
     <div id="banner"></div>
@@ -55,7 +60,7 @@
       </div>
       <button id="action-btn" aria-label="Exit, board, or interact">USE</button>
       <button id="look-btn" aria-label="Look at camera">LOOK</button>
-      <button id="jump-btn" aria-label="Hold high-thrust boost">BOOST</button>
+      <button id="jump-btn" aria-label="Hold hover lift">BOOST</button>
     </div>
 
     <script type="module" src="/src/main.js"></script>
