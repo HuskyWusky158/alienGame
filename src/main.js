@@ -77,18 +77,13 @@ const UP = new THREE.Vector3(0, 1, 0);
 const START_NORMAL = new THREE.Vector3(0, 1, 0);
 const playerNormal = START_NORMAL.clone();
 const playerHeading = new THREE.Vector3(0, 0, -1);
-const GARAGE_NORMAL = normalFromSurfaceCoords(-26, 10);
+const GARAGE_NORMAL = normalFromSurfaceCoords(36, 5);
 const GARAGE_OUTWARD_HEADING = START_NORMAL.clone()
   .addScaledVector(GARAGE_NORMAL, -START_NORMAL.dot(GARAGE_NORMAL))
-  .normalize();
-const GARAGE_SPAWN_NORMAL = stepWorldNormal(GARAGE_NORMAL, GARAGE_OUTWARD_HEADING, 11, PLANET_RADIUS);
-const GARAGE_SPAWN_HEADING = GARAGE_NORMAL.clone()
-  .addScaledVector(GARAGE_SPAWN_NORMAL, -GARAGE_NORMAL.dot(GARAGE_SPAWN_NORMAL))
   .normalize();
 const MARS_COURSE_CLEAR_ZONES = [
   { normal: normalFromSurfaceCoords(76, 48), radius: 58 },
   { normal: normalFromSurfaceCoords(-128, -2), radius: 48 },
-  { normal: normalFromSurfaceCoords(42, -118), radius: 64 },
 ];
 const MOON_COLD_TRAP_DIRECTION = UP.clone()
   .addScaledVector(MOON_PAD_NORMAL, -UP.dot(MOON_PAD_NORMAL))
@@ -201,10 +196,11 @@ function sampleMoonMacroGeology(normal, target = null) {
 }
 
 const HUBS = [
-  { key: 'outpost', name: "Caitlin's Projects", x: 144, z: -144, color: 0x6fb8ff, trigger: 13 },
+  // Close to the starting region, but isolated from the driving courses.
+  { key: 'outpost', name: "Caitlin's Projects", x: 62, z: -42, color: 0x6fb8ff, trigger: 19 },
   { key: 'cavern', name: 'Crystal Outcrop', x: -144, z: -144, color: 0xb266ff, trigger: 13, hiddenWaypoint: true },
-  { key: 'ruins', name: 'Ancient Ruins', x: 144, z: 144, color: 0xe0a35a, trigger: 13 },
-  { key: 'crash', name: 'Crash Site', x: -144, z: 144, color: 0xff6a4a, trigger: 13 },
+  { key: 'planetarium', name: 'Xenobiology Globe', x: 100, z: 112, color: 0x78dfff, trigger: 22 },
+  { key: 'crash', name: 'Crash Site', x: -92, z: 94, color: 0xff6a4a, trigger: 13 },
   { key: 'nightfall', name: 'Crystal Cavern', x: -52, z: -42, color: 0x62e6bd, trigger: 19 },
 ];
 const SURFACE_WAYPOINT_HUBS = HUBS.filter((hub) => !hub.hiddenWaypoint);
@@ -244,9 +240,24 @@ const PROJECTS = [
   ...project,
   preview: `https://image.thum.io/get/width/960/crop/540/noanimate/${project.url}`,
 }));
+const CONTACT_TERMINAL = {
+  kind: 'contact',
+  title: 'Caitlin Bax · Contact',
+  desc: 'Email, GitHub, LinkedIn, and resume links from Caitlin’s project archive.',
+  url: 'mailto:baxc1722@gmail.com',
+  label: 'Email Caitlin',
+  details: [
+    'EMAIL · baxc1722@gmail.com',
+    'GITHUB · github.com/HuskyWusky158',
+    'LINKEDIN · linkedin.com/in/caitlinbax325',
+    'RESUME · caitlin-portfolio-weld.vercel.app/resume.pdf',
+  ],
+};
+const ARCHIVE_SCREENS = [...PROJECTS, CONTACT_TERMINAL];
+const PROJECT_SHIP_SCALE = 2.55;
 
 const SPEAKER_STATIONS = [
-  { key: 'ion', name: 'MARS CHILL-HOP', x: -12, z: -10, color: 0x72e6ff },
+  { key: 'ion', name: 'MARS CHILL-HOP', x: -30, z: 2, color: 0x72e6ff },
   { key: 'redshift', name: 'MARS CHILL-HOP', x: 144, z: -96, color: 0xff806d },
   { key: 'dust', name: 'MARS CHILL-HOP', x: -156, z: 70, color: 0xc28cff },
   { key: 'bloom', name: 'MARS CHILL-HOP', x: 48, z: 164, color: 0x78ffc1 },
@@ -364,11 +375,14 @@ NIGHTFALL_CAVE.heading = START_NORMAL.clone()
 NIGHTFALL_CAVE.right = NIGHTFALL_CAVE.heading.clone().cross(NIGHTFALL_CAVE.normal).normalize();
 const CAVE_INWARD_HEADING = NIGHTFALL_CAVE.heading.clone().multiplyScalar(-1);
 const CAVE_ROUTE_POINTS = [
-  new THREE.Vector3(0, 0.1, 3),
-  new THREE.Vector3(0, -0.3, -8),
-  new THREE.Vector3(4.8, -4.8, -25),
-  new THREE.Vector3(-5.5, -11.5, -47),
-  new THREE.Vector3(6.2, -19.5, -72),
+  // The opening stays aligned with the surface before settling into a long,
+  // readable grade. This makes entering the cave feel like a drive down
+  // instead of a teleport between the spherical surface and the tunnel.
+  new THREE.Vector3(0, 0.12, 4.4),
+  new THREE.Vector3(0, -1.25, -8),
+  new THREE.Vector3(3.2, -5.1, -24),
+  new THREE.Vector3(-4.8, -12.4, -47),
+  new THREE.Vector3(6.2, -20.2, -72),
   new THREE.Vector3(2.5, -28.5, -98),
   new THREE.Vector3(-6.5, -37.2, -126),
   new THREE.Vector3(0, -44.2, -151),
@@ -757,7 +771,11 @@ function baseSurfaceHeight(normal) {
 const FLATTEN_CENTERS = [
   { normal: START_NORMAL, r0: 6, r1: 11 },
   { normal: GARAGE_NORMAL, r0: 15, r1: 23 },
-  ...HUBS.map((hub) => ({ normal: hub.normal, r0: 8, r1: 13 })),
+  ...HUBS.map((hub) => ({
+    normal: hub.normal,
+    r0: hub.key === 'planetarium' ? 15 : 8,
+    r1: hub.key === 'planetarium' ? 22 : 13,
+  })),
   ...[-12, 12].map((distance) => ({
     normal: stepWorldNormal(NIGHTFALL_CAVE.normal, NIGHTFALL_CAVE.heading, distance, PLANET_RADIUS),
     r0: 7,
@@ -1611,11 +1629,6 @@ function updateMarsDustFront(dt, time, activeMarsNormal) {
   } else if (scene.fog === marsDustFog) {
     scene.fog = null;
   }
-  sunLight.intensity *= THREE.MathUtils.lerp(1, 0.38, atmosphereBlend);
-  hemisphereLight.intensity *= THREE.MathUtils.lerp(1, 0.58, atmosphereBlend);
-  ambientLight.intensity *= THREE.MathUtils.lerp(1, 0.72, atmosphereBlend);
-  renderer.toneMappingExposure *= THREE.MathUtils.lerp(1, 0.78, atmosphereBlend);
-
   if (targetBlend > 0.46 && !marsDustStormWasNear) {
     marsDustStormWasNear = true;
     showBanner('REGIONAL DUST FRONT ARRIVING · VISIBILITY FALLING');
@@ -2216,7 +2229,7 @@ function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 
   const trailColor = new THREE.Color(color);
   const variedColor = new THREE.Color();
   for (let index = 0; index <= steps; index++) {
-    const routeRatio = THREE.MathUtils.lerp(0.025, 0.975, index / steps);
+    const routeRatio = index / steps;
     const normal = slerpNormals(START_NORMAL, hub.normal, routeRatio);
     forward.copy(hub.normal).addScaledVector(normal, -hub.normal.dot(normal)).normalize();
     right.crossVectors(forward, normal).normalize();
@@ -2265,6 +2278,28 @@ function buildDirtPath(hub) {
   buildTrailRibbon(hub, 0.15, 0.72, 0.145, 0x3f211c, 0.78);
 }
 SURFACE_WAYPOINT_HUBS.forEach(buildDirtPath);
+
+function buildTrailheadPlaza() {
+  const group = new THREE.Group();
+  group.name = 'Shared Mars trailhead · player spawn';
+  placeSurfaceGroup(group, START_NORMAL, 0.105);
+  const packedDirt = new THREE.Mesh(
+    new THREE.CircleGeometry(7.4, 48),
+    new THREE.MeshStandardMaterial({ color: 0x78341f, roughness: 1, metalness: 0 })
+  );
+  packedDirt.rotation.x = -Math.PI / 2;
+  group.add(packedDirt);
+  const centerMark = new THREE.Mesh(
+    new THREE.RingGeometry(1.45, 1.72, 28),
+    new THREE.MeshBasicMaterial({ color: 0xe18b58, transparent: true, opacity: 0.54, side: THREE.DoubleSide })
+  );
+  centerMark.rotation.x = -Math.PI / 2;
+  centerMark.position.y = 0.018;
+  group.add(centerMark);
+  return group;
+}
+
+const trailheadPlaza = buildTrailheadPlaza();
 
 function makeLabelSprite(text, colorHex) {
   const canvas = document.createElement('canvas');
@@ -2325,7 +2360,7 @@ function buildSignposts() {
   const signposts = SURFACE_WAYPOINT_HUBS.map((hub) => ({
     hub,
     target: hub.normal,
-    label: hub.key === 'crash' ? "CAITLIN'S CONTACT INFO" : hub.name,
+    label: hub.key === 'crash' ? 'CRASHED SATELLITE' : hub.name,
   }));
   const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4a2817, roughness: 0.96, flatShading: true });
   const boardMaterial = new THREE.MeshStandardMaterial({
@@ -2337,29 +2372,35 @@ function buildSignposts() {
     side: THREE.DoubleSide,
   });
   const nailMaterial = new THREE.MeshStandardMaterial({ color: 0x4a4239, metalness: 0.7, roughness: 0.5 });
-  const landingCameraPosition = surfaceWorldPosition(START_NORMAL)
-    .addScaledVector(START_NORMAL, 18)
-    .addScaledVector(playerHeading, -16);
   signposts.forEach(({ hub, target, label: signLabel }) => {
     const group = new THREE.Group();
     const signDistance = 7.5;
-    const pathNormal = slerpNormals(START_NORMAL, target, signDistance / geodesicDistance(START_NORMAL, target));
+    const trailDistance = geodesicDistance(START_NORMAL, target);
+    const pathNormal = slerpNormals(START_NORMAL, target, signDistance / trailDistance);
     const towardDestination = target.clone().addScaledVector(pathNormal, -target.dot(pathNormal)).normalize();
     const pathRight = towardDestination.clone().cross(pathNormal).normalize();
     const boardWidth = THREE.MathUtils.clamp(3.35 + signLabel.length * 0.12, 4.2, 6.4);
     // Keep the full board beyond the packed-dirt trail while its face remains
-    // aimed at approaching drivers. Long contact signs get extra shoulder room.
+    // aimed at approaching drivers. Longer landmark names get more shoulder room.
     const shoulderDistance = boardWidth * 0.5 + 1.45;
     const normal = stepWorldNormal(pathNormal, pathRight, shoulderDistance, PLANET_RADIUS);
-    const signPosition = surfaceWorldPosition(normal);
-    const signViewDirection = landingCameraPosition.clone().sub(signPosition)
-      .addScaledVector(normal, -landingCameraPosition.clone().sub(signPosition).dot(normal))
+    const approachNormal = slerpNormals(START_NORMAL, target, Math.max(0, signDistance - 3.2) / trailDistance);
+    // Face the traveler coming up this exact dirt ribbon rather than a fixed
+    // spawn camera. Each sign is now readable from its own approach trail.
+    const signViewDirection = approachNormal.clone()
+      .addScaledVector(normal, -approachNormal.dot(normal))
       .normalize();
     const boardRight = normal.clone().cross(signViewDirection).normalize();
-    const signTowardDestination = target.clone().addScaledVector(normal, -target.dot(normal)).normalize();
-    const arrowSide = signTowardDestination.dot(boardRight) >= 0 ? 1 : -1;
-    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.7, 0.28), postMaterial);
-    pole.position.y = 1.32;
+    // Aim the arrow directly from the roadside shoulder toward this sign's
+    // dirt ribbon. Projecting the distant destination onto the board could
+    // flip the arrow when the board was viewed at an oblique angle.
+    const directionToPath = pathNormal.clone().addScaledVector(normal, -pathNormal.dot(normal)).normalize();
+    const trailFacingSide = directionToPath.dot(boardRight) >= 0 ? 1 : -1;
+    const arrowSide = trailFacingSide;
+    // Stop the support below the lettering instead of running it through the
+    // middle of the words on the sign face.
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.62, 0.28), postMaterial);
+    pole.position.y = 0.8;
     pole.rotation.z = (hub.x + hub.z) * 0.00022;
     group.add(pole);
     const arrowHeadLength = 0.92;
@@ -2420,7 +2461,33 @@ function makeProjectScreenTexture(project, index) {
   canvas.width = 768;
   canvas.height = 432;
   const ctx = canvas.getContext('2d');
-  const hues = [190, 155, 32, 274, 8];
+  if (project.kind === 'contact') {
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, '#123b43');
+    gradient.addColorStop(1, '#09121d');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(111, 235, 255, 0.72)';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+    ctx.fillStyle = '#eaffff';
+    ctx.font = '900 39px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CAITLIN BAX · CONTACT', 42, 54, 680);
+    project.details.forEach((detail, detailIndex) => {
+      ctx.fillStyle = detailIndex === 0 ? '#98fff0' : '#c6e9f1';
+      ctx.font = detailIndex === 0 ? '800 24px monospace' : '700 20px monospace';
+      ctx.fillText(detail, 42, 125 + detailIndex * 57, 680);
+    });
+    ctx.fillStyle = 'rgba(156, 244, 255, 0.86)';
+    ctx.font = '900 20px monospace';
+    ctx.fillText('CLICK TERMINAL TO EMAIL CAITLIN', 42, 382, 680);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+  const hues = [190, 155, 32, 274, 8, 45];
   const hue = hues[index % hues.length];
   const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
   gradient.addColorStop(0, `hsl(${hue} 62% 16%)`);
@@ -2446,7 +2513,7 @@ function makeProjectScreenTexture(project, index) {
   ctx.fillText(new URL(project.url).hostname.toUpperCase(), 42, 346, 680);
   ctx.fillStyle = 'rgba(223, 245, 255, 0.7)';
   ctx.font = '700 17px monospace';
-  ctx.fillText('REMOTE SNAPSHOT LINK · SELECT SCREEN TO OPEN', 42, 390, 680);
+  ctx.fillText('CLICK SCREEN TO OPEN LIVE SITE', 42, 390, 680);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
@@ -2455,6 +2522,11 @@ function makeProjectScreenTexture(project, index) {
 function buildResearchOutpost(hub) {
   const group = new THREE.Group();
   placeSurfaceGroup(group, hub.normal);
+  const trailApproachWorld = START_NORMAL.clone()
+    .addScaledVector(hub.normal, -START_NORMAL.dot(hub.normal))
+    .normalize();
+  const trailApproachLocal = trailApproachWorld.applyQuaternion(group.quaternion.clone().invert()).normalize();
+  const entranceYaw = Math.atan2(-trailApproachLocal.z, trailApproachLocal.x);
 
   const hull = stdMat(0x68747a, { metalness: 0.82, roughness: 0.38, flatShading: true });
   const scorchedHull = stdMat(0x292c2c, { metalness: 0.62, roughness: 0.72, flatShading: true });
@@ -2476,7 +2548,8 @@ function buildResearchOutpost(hub) {
     new THREE.MeshBasicMaterial({ color: 0x180705, transparent: true, opacity: 0.62, depthWrite: false })
   );
   scorch.rotation.x = -Math.PI / 2;
-  scorch.scale.set(1.45, 0.72, 1);
+  const shipScaleRatio = PROJECT_SHIP_SCALE / 1.75;
+  scorch.scale.set(1.45 * shipScaleRatio, 0.72 * shipScaleRatio, 1);
   scorch.position.set(-0.7, 0.025, 1.25);
   group.add(scorch);
 
@@ -2501,7 +2574,10 @@ function buildResearchOutpost(hub) {
   const saucer = new THREE.Group();
   saucer.name = 'Caitlin Projects · downed extraterrestrial craft';
   saucer.position.set(-0.45, 0.72, 0.15);
-  saucer.rotation.set(-0.11, -0.42, 0.19);
+  // Local +X is the broken hatch and recovery-ramp side. Aim it directly at
+  // the incoming dirt trail so players naturally walk into the entrance.
+  saucer.rotation.set(-0.11, entranceYaw, 0.19);
+  saucer.scale.setScalar(PROJECT_SHIP_SCALE);
   group.add(saucer);
 
   const lowerDisc = new THREE.Mesh(new THREE.CylinderGeometry(4.75, 3.75, 1.05, 48, 2), scorchedHull);
@@ -2545,28 +2621,80 @@ function buildResearchOutpost(hub) {
   }
 
   const breach = new THREE.Mesh(new THREE.SphereGeometry(1.18, 9, 7), exposedInterior);
-  breach.position.set(4.25, 1.24, 1.3);
+  breach.position.set(4.25, 1.24, 0);
   breach.scale.set(0.58, 1.02, 1.25);
   saucer.add(breach);
   const breachGlow = new THREE.Mesh(
     new THREE.CircleGeometry(0.78, 18),
     new THREE.MeshBasicMaterial({ color: 0x58dfff, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, toneMapped: false })
   );
-  breachGlow.position.set(4.9, 1.24, 1.3);
+  breachGlow.position.set(4.9, 1.24, 0);
   breachGlow.rotation.y = Math.PI / 2;
   saucer.add(breachGlow);
 
   for (let i = 0; i < 7; i++) {
     const tornPlate = new THREE.Mesh(new THREE.ConeGeometry(0.45 + (i % 3) * 0.15, 1.45 + (i % 2) * 0.5, 3), scorchedHull);
-    tornPlate.position.set(4.35 + Math.sin(i * 2.4) * 0.9, 1.18 + Math.cos(i * 1.7) * 0.72, 1.3 + Math.sin(i * 3.1) * 0.9);
+    tornPlate.position.set(4.35 + Math.sin(i * 2.4) * 0.9, 1.18 + Math.cos(i * 1.7) * 0.72, Math.sin(i * 3.1) * 0.9);
     tornPlate.rotation.set(i * 0.53, i * 0.81, i * 0.37);
     saucer.add(tornPlate);
   }
 
-  const recoveryRamp = new THREE.Mesh(new THREE.BoxGeometry(4.1, 0.16, 1.7), scorchedHull);
-  recoveryRamp.position.set(6.4, 0.42, 1.3);
-  recoveryRamp.rotation.z = -0.17;
-  saucer.add(recoveryRamp);
+  // Build one continuous ramp from the transformed hatch position to the dirt
+  // trail. Its final section follows the spherical terrain instead of using a
+  // flat tangent-plane box that can visibly float over the curved planet.
+  group.updateMatrixWorld(true);
+  const rampHatchWorld = saucer.localToWorld(new THREE.Vector3(4.9, 0.92, 0));
+  const rampStartNormal = rampHatchWorld.clone().normalize();
+  const rampEndNormal = stepWorldNormal(hub.normal, trailApproachWorld, 34, PLANET_RADIUS);
+  const rampHatchSurface = surfaceWorldPosition(rampStartNormal);
+  const rampStartLift = Math.max(0.3, rampHatchWorld.clone().sub(rampHatchSurface).dot(rampStartNormal));
+  const rampForwardStart = rampEndNormal.clone()
+    .addScaledVector(rampStartNormal, -rampEndNormal.dot(rampStartNormal))
+    .normalize();
+  const rampArcAngle = Math.acos(THREE.MathUtils.clamp(rampStartNormal.dot(rampEndNormal), -1, 1));
+  const apronVertices = [];
+  const apronIndices = [];
+  const apronSteps = 26;
+  for (let index = 0; index <= apronSteps; index++) {
+    const routeRatio = index / apronSteps;
+    const apronNormal = slerpNormals(rampStartNormal, rampEndNormal, routeRatio);
+    const apronForward = rampEndNormal.clone().addScaledVector(apronNormal, -rampEndNormal.dot(apronNormal)).normalize();
+    const apronRight = apronForward.clone().cross(apronNormal).normalize();
+    const terrainContact = THREE.MathUtils.smoothstep(routeRatio, 0, 0.46);
+    const rampLift = THREE.MathUtils.lerp(rampStartLift, 0.16, terrainContact);
+    [-1, 1].forEach((side) => {
+      const edgeNormal = stepWorldNormal(apronNormal, apronRight, side * 2.15, PLANET_RADIUS);
+      const edgePosition = surfaceWorldPosition(edgeNormal, rampLift);
+      apronVertices.push(edgePosition.x, edgePosition.y, edgePosition.z);
+    });
+    if (index < apronSteps) {
+      const vertexOffset = index * 2;
+      apronIndices.push(vertexOffset, vertexOffset + 2, vertexOffset + 1, vertexOffset + 2, vertexOffset + 3, vertexOffset + 1);
+    }
+  }
+  const apronGeometry = new THREE.BufferGeometry();
+  apronGeometry.setAttribute('position', new THREE.Float32BufferAttribute(apronVertices, 3));
+  apronGeometry.setIndex(apronIndices);
+  apronGeometry.computeVertexNormals();
+  const rampMaterial = new THREE.MeshStandardMaterial({
+    color: 0x4a5153,
+    metalness: 0.68,
+    roughness: 0.64,
+    flatShading: true,
+    side: THREE.DoubleSide,
+  });
+  const rampApron = new THREE.Mesh(apronGeometry, rampMaterial);
+  rampApron.name = 'Project ship ramp · continuous hatch-to-trail surface';
+  scene.add(rampApron);
+  const rampSurface = {
+    startNormal: rampStartNormal,
+    endNormal: rampEndNormal,
+    forwardStart: rampForwardStart,
+    arcAngle: rampArcAngle,
+    startLift: rampStartLift,
+    endLift: 0.16,
+    halfWidth: 2.15,
+  };
 
   const rimLights = [];
   for (let i = 0; i < 12; i++) {
@@ -2585,11 +2713,11 @@ function buildResearchOutpost(hub) {
   }
 
   const interiorLight = new THREE.PointLight(0x54dfff, 3.6, 15, 2);
-  interiorLight.position.set(5.25, 1.5, 1.3);
+  interiorLight.position.set(5.25, 1.5, 0);
   saucer.add(interiorLight);
 
   const rampLabel = makeLabelSprite('WALK UP RAMP · E ENTER PROJECT ARCHIVE', '#c8f8ff');
-  rampLabel.position.set(6.35, 2.65, 1.3);
+  rampLabel.position.set(6.35, 2.65, 0);
   rampLabel.scale.set(8.2, 1.06, 1);
   saucer.add(rampLabel);
 
@@ -2635,8 +2763,8 @@ function buildResearchOutpost(hub) {
   }
 
   const archiveTitle = makeLabelSprite("CAITLIN'S PROJECT ARCHIVE · SELECT A SCREEN", '#b8f7ff');
-  archiveTitle.position.set(0, 5.05, -5.55);
-  archiveTitle.scale.set(9.2, 1.15, 1);
+  archiveTitle.position.set(0, 5.45, -5.72);
+  archiveTitle.scale.set(8.6, 0.82, 1);
   interiorGallery.add(archiveTitle);
 
   const projectScreens = [];
@@ -2644,19 +2772,26 @@ function buildResearchOutpost(hub) {
     { x: -4.7, y: 3.72, z: -4.55, yaw: 0.24 },
     { x: 0, y: 3.88, z: -5.22, yaw: 0 },
     { x: 4.7, y: 3.72, z: -4.55, yaw: -0.24 },
-    { x: -2.65, y: 1.48, z: -4.25, yaw: 0.12 },
-    { x: 2.65, y: 1.48, z: -4.25, yaw: -0.12 },
+    { x: -4.7, y: 1.42, z: -4.55, yaw: 0.24 },
+    { x: 0, y: 1.35, z: -5.22, yaw: 0 },
+    { x: 4.7, y: 1.42, z: -4.55, yaw: -0.24 },
   ];
-  PROJECTS.forEach((project, index) => {
+  ARCHIVE_SCREENS.forEach((project, index) => {
     const slot = screenLayout[index];
     const screenRig = new THREE.Group();
     screenRig.position.set(slot.x, slot.y, slot.z);
     screenRig.rotation.y = slot.yaw;
     interiorGallery.add(screenRig);
     const frameColor = index % 2 === 0 ? 0x64e8ff : 0xb087ff;
+    const frameMaterial = stdMat(0x192831, {
+      metalness: 0.82,
+      roughness: 0.3,
+      emissive: frameColor,
+      emissiveIntensity: 0.32,
+    });
     const frame = new THREE.Mesh(
       new THREE.BoxGeometry(3.48, 2.04, 0.18),
-      stdMat(0x192831, { metalness: 0.82, roughness: 0.3, emissive: frameColor, emissiveIntensity: 0.32 })
+      frameMaterial
     );
     screenRig.add(frame);
     const screenMaterial = new THREE.MeshBasicMaterial({
@@ -2665,6 +2800,7 @@ function buildResearchOutpost(hub) {
     });
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 1.75), screenMaterial);
     screen.position.z = 0.101;
+    screen.userData.projectScreenIndex = index;
     screenRig.add(screen);
     const statusLight = new THREE.Mesh(
       new THREE.SphereGeometry(0.055, 8, 6),
@@ -2672,7 +2808,14 @@ function buildResearchOutpost(hub) {
     );
     statusLight.position.set(1.52, -0.88, 0.13);
     screenRig.add(statusLight);
-    projectScreens.push({ project, material: screenMaterial, statusLight, loaded: false });
+    projectScreens.push({
+      project,
+      screen,
+      material: screenMaterial,
+      frameMaterial,
+      statusLight,
+      loaded: false,
+    });
   });
 
   const consoleDesk = new THREE.Mesh(
@@ -2702,7 +2845,7 @@ function buildResearchOutpost(hub) {
   for (let i = 0; i < smokeCount; i++) {
     const x = 4.3 + (Math.random() - 0.5) * 1.5;
     const y = 1.8 + Math.random() * 4.8;
-    const z = 1.3 + (Math.random() - 0.5) * 1.5;
+    const z = (Math.random() - 0.5) * 1.5;
     smokePositions[i * 3] = smokeBases[i * 3] = x;
     smokePositions[i * 3 + 1] = smokeBases[i * 3 + 1] = y;
     smokePositions[i * 3 + 2] = smokeBases[i * 3 + 2] = z;
@@ -2742,10 +2885,10 @@ function buildResearchOutpost(hub) {
   archiveLabel.scale.set(7.1, 1.1, 1);
   group.add(archiveLabel);
 
-  addCollider(hub.x, hub.z, 6.8);
+  addCollider(hub.x, hub.z, 6.8 * PROJECT_SHIP_SCALE);
   return {
     group, saucer, rimLights, interiorLight, smoke, smokeBases, smokeSpeeds, sparks, breachGlow,
-    interiorGallery, interiorCameraAnchor, interiorLookAnchor, projectScreens, archiveLight,
+    interiorGallery, interiorCameraAnchor, interiorLookAnchor, projectScreens, archiveLight, rampApron, rampSurface,
   };
 }
 
@@ -2789,51 +2932,333 @@ function buildCrystalCavern(hub) {
   return { group, crystalMaterials };
 }
 
-function buildAncientRuins(hub) {
-  const baseY = getTerrainHeight(hub.x, hub.z);
+function buildMarsXenobiologyGlobe(hub) {
   const group = new THREE.Group();
+  group.name = 'Ares Xenobiology Globe · extraterrestrial specimen conservatory';
   placeSurfaceGroup(group, hub.normal);
 
-  const pillarCount = 7;
-  for (let i = 0; i < pillarCount; i++) {
-    const a = (i / pillarCount) * Math.PI * 2;
-    const dx = Math.cos(a) * 8.5;
-    const dz = Math.sin(a) * 8.5;
-    const fallen = Math.random() < 0.35;
-    const pillar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.55, 0.75, 4.5, 10),
-      stdMat(0xcc9966, { roughness: 0.9 })
-    );
-    if (fallen) {
-      pillar.rotation.z = Math.PI / 2 + (Math.random() - 0.5) * 0.4;
-      pillar.position.set(dx, 0.6, dz);
+  const globeRadius = 15.2;
+  const globeCenterY = globeRadius;
+  const trailApproachWorld = START_NORMAL.clone()
+    .addScaledVector(hub.normal, -START_NORMAL.dot(hub.normal))
+    .normalize();
+  const trailApproachLocal = trailApproachWorld.applyQuaternion(group.quaternion.clone().invert()).normalize();
+  const entranceYaw = Math.atan2(trailApproachLocal.x, trailApproachLocal.z);
+  const foundationMaterial = stdMat(0x15262c, {
+    metalness: 0.78,
+    roughness: 0.38,
+    emissive: 0x071b21,
+    emissiveIntensity: 0.48,
+  });
+  const frameMaterial = stdMat(0x78aeb8, {
+    metalness: 0.86,
+    roughness: 0.24,
+    emissive: 0x123d48,
+    emissiveIntensity: 0.78,
+  });
+  const globeMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x83e7ef,
+    emissive: 0x0b3940,
+    emissiveIntensity: 0.4,
+    transparent: true,
+    opacity: 0.15,
+    transmission: 0.34,
+    thickness: 0.38,
+    roughness: 0.1,
+    metalness: 0.03,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const floor = new THREE.Mesh(new THREE.CylinderGeometry(14.05, 14.55, 0.66, 56), foundationMaterial);
+  floor.position.y = 0.33;
+  group.add(floor);
+  const foundationRing = new THREE.Mesh(new THREE.TorusGeometry(14.2, 0.5, 10, 72), frameMaterial);
+  foundationRing.rotation.x = Math.PI / 2;
+  foundationRing.position.y = 0.7;
+  group.add(foundationRing);
+
+  const globe = new THREE.Mesh(new THREE.SphereGeometry(globeRadius, 52, 30), globeMaterial);
+  globe.position.y = globeCenterY;
+  globe.renderOrder = 5;
+  group.add(globe);
+  const globeRibs = [];
+  for (let index = 0; index < 8; index++) {
+    const meridian = new THREE.Mesh(new THREE.TorusGeometry(globeRadius + 0.05, 0.105, 6, 80), frameMaterial);
+    meridian.position.y = globeCenterY;
+    meridian.rotation.y = (index / 8) * Math.PI;
+    group.add(meridian);
+    globeRibs.push(meridian);
+  }
+  [-7.6, 0, 7.6].forEach((latitude) => {
+    const radius = Math.sqrt(globeRadius * globeRadius - latitude * latitude);
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.105, 6, 80), frameMaterial);
+    rib.rotation.x = Math.PI / 2;
+    rib.position.y = globeCenterY + latitude;
+    group.add(rib);
+    globeRibs.push(rib);
+  });
+
+  const entrance = new THREE.Group();
+  entrance.position.set(trailApproachLocal.x * 13.95, 3.05, trailApproachLocal.z * 13.95);
+  entrance.rotation.y = entranceYaw;
+  group.add(entrance);
+  const portal = new THREE.Mesh(
+    new THREE.CircleGeometry(2.55, 36),
+    new THREE.MeshBasicMaterial({
+      color: 0x17474b,
+      transparent: true,
+      opacity: 0.26,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  entrance.add(portal);
+  const portalFrame = new THREE.Mesh(new THREE.TorusGeometry(2.62, 0.32, 10, 40), frameMaterial);
+  portalFrame.position.z = 0.04;
+  entrance.add(portalFrame);
+  const entranceLabel = makeLabelSprite('ENTER · XENOBIOLOGY GLOBE', '#a5fff0');
+  entranceLabel.position.set(0, 3.55, 0.12);
+  entranceLabel.scale.set(6.5, 0.86, 1);
+  entrance.add(entranceLabel);
+
+  const interiorWalkway = new THREE.Mesh(new THREE.BoxGeometry(4.1, 0.18, 15), foundationMaterial);
+  interiorWalkway.position.set(trailApproachLocal.x * 7.45, 0.76, trailApproachLocal.z * 7.45);
+  interiorWalkway.rotation.y = entranceYaw;
+  group.add(interiorWalkway);
+
+  const specimenSpecs = [
+    { name: 'PRISM MANTIS · KEPLER-62F', type: 'mantis', color: 0x69f3ce, accent: 0xb483ff, substrate: 0x174a3d },
+    { name: 'EMBER BEETLE · TRAPPIST-1E', type: 'beetle', color: 0xff694a, accent: 0xffcf5a, substrate: 0x4b1c13 },
+    { name: 'LUNA HOPPER · PROXIMA B', type: 'hopper', color: 0xa9d9ff, accent: 0xf3fbff, substrate: 0x38444d },
+    { name: 'VOID BEE · WASP-96B', type: 'bee', color: 0xf3c64f, accent: 0x8f6cff, substrate: 0x312740 },
+    { name: 'CLOUD JELLY · K2-18B', type: 'jelly', color: 0x73dfff, accent: 0xff91df, substrate: 0x17394c },
+    { name: 'CRYSTAL SNAIL · TOI-700D', type: 'snail', color: 0xb5ffeb, accent: 0x65a2ff, substrate: 0x263758 },
+  ];
+  const creatureRuntimes = [];
+
+  function createSpecimenCreature(spec, specimenIndex) {
+    const creature = new THREE.Group();
+    creature.name = spec.name;
+    const bodyMaterial = stdMat(spec.color, {
+      roughness: spec.type === 'jelly' ? 0.18 : 0.48,
+      metalness: spec.type === 'beetle' ? 0.34 : 0.08,
+      emissive: spec.color,
+      emissiveIntensity: 0.34,
+      transparent: spec.type === 'jelly',
+      opacity: spec.type === 'jelly' ? 0.72 : 1,
+    });
+    const accentMaterial = stdMat(spec.accent, {
+      roughness: 0.32,
+      emissive: spec.accent,
+      emissiveIntensity: 0.72,
+    });
+    const darkMaterial = stdMat(0x091012, { roughness: 0.72, metalness: 0.16 });
+    const wings = [];
+    let body;
+
+    if (spec.type === 'jelly') {
+      body = new THREE.Mesh(new THREE.SphereGeometry(0.62, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.72), bodyMaterial);
+      body.position.y = 1.18;
+      body.scale.set(1, 0.78, 1);
+      creature.add(body);
+      for (let tentacleIndex = 0; tentacleIndex < 6; tentacleIndex++) {
+        const angle = (tentacleIndex / 6) * Math.PI * 2;
+        const tentacle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, 0.9 + (tentacleIndex % 3) * 0.14, 6), accentMaterial);
+        tentacle.position.set(Math.cos(angle) * 0.34, 0.52, Math.sin(angle) * 0.34);
+        tentacle.rotation.z = Math.sin(angle) * 0.18;
+        creature.add(tentacle);
+      }
     } else {
-      pillar.position.set(dx, 2.25, dz);
-      addCollider(hub.x + dx, hub.z + dz, 0.9);
+      body = new THREE.Mesh(new THREE.SphereGeometry(0.52, 18, 12), bodyMaterial);
+      body.position.y = 0.86;
+      body.scale.set(
+        spec.type === 'mantis' ? 0.58 : spec.type === 'snail' ? 1.18 : 0.9,
+        spec.type === 'hopper' ? 0.92 : 0.7,
+        spec.type === 'mantis' ? 1.5 : spec.type === 'bee' ? 1.35 : 1.05
+      );
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(spec.type === 'hopper' ? 0.42 : 0.31, 14, 10), accentMaterial);
+      head.position.set(0, spec.type === 'hopper' ? 1.22 : 0.98, -0.66);
+      creature.add(head);
+      [-1, 1].forEach((side) => {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), darkMaterial);
+        eye.position.set(side * 0.17, head.position.y + 0.06, -0.91);
+        creature.add(eye);
+      });
+      const legCount = spec.type === 'snail' ? 2 : 6;
+      for (let legIndex = 0; legIndex < legCount; legIndex++) {
+        const side = legIndex % 2 === 0 ? -1 : 1;
+        const row = Math.floor(legIndex / 2);
+        const legLength = spec.type === 'hopper' && row === 2 ? 1.25 : 0.72;
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, legLength, 6), darkMaterial);
+        leg.position.set(side * (spec.type === 'hopper' && row === 2 ? 0.64 : 0.47), 0.48, (row - 1) * 0.36);
+        leg.rotation.z = side * (spec.type === 'hopper' && row === 2 ? 1.04 : 0.86);
+        leg.rotation.x = (row - 1) * 0.28;
+        creature.add(leg);
+      }
+      if (spec.type === 'mantis' || spec.type === 'bee') {
+        [-1, 1].forEach((side) => {
+          const wing = new THREE.Mesh(
+            new THREE.SphereGeometry(0.48, 12, 8),
+            new THREE.MeshBasicMaterial({ color: spec.accent, transparent: true, opacity: 0.38, depthWrite: false, toneMapped: false })
+          );
+          wing.position.set(side * 0.47, 1.05, 0.14);
+          wing.scale.set(0.5, 0.12, 1.25);
+          wing.rotation.z = side * 0.42;
+          creature.add(wing);
+          wings.push({ mesh: wing, side });
+        });
+      }
+      if (spec.type === 'beetle') {
+        const shellLine = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.95), accentMaterial);
+        shellLine.position.set(0, 1.12, 0.08);
+        creature.add(shellLine);
+      }
+      if (spec.type === 'snail') {
+        const shell = new THREE.Mesh(new THREE.SphereGeometry(0.56, 16, 12), accentMaterial);
+        shell.position.set(0, 1.05, 0.2);
+        shell.scale.z = 0.5;
+        creature.add(shell);
+      }
     }
-    group.add(pillar);
+
+    creature.position.y = 0.68;
+    return {
+      group: creature,
+      body,
+      bodyBaseScaleY: body.scale.y,
+      wings,
+      baseY: creature.position.y,
+      phase: specimenIndex * 1.37,
+      type: spec.type,
+    };
   }
 
-  const pedestal = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.6, 1.4), stdMat(0xb5875a, { roughness: 0.85 }));
-  pedestal.position.y = 1.3;
-  group.add(pedestal);
-  addCollider(hub.x, hub.z, 1.3);
+  const habitatHall = new THREE.Group();
+  habitatHall.rotation.y = entranceYaw;
+  group.add(habitatHall);
+  const habitatSlots = [
+    { x: -4.8, z: 2.65 }, { x: 0, z: 2.65 }, { x: 4.8, z: 2.65 },
+    { x: -4.8, z: -2.45 }, { x: 0, z: -2.45 }, { x: 4.8, z: -2.45 },
+  ];
+  specimenSpecs.forEach((spec, index) => {
+    const slot = habitatSlots[index];
+    const habitat = new THREE.Group();
+    habitat.name = `Glass specimen square · ${spec.name}`;
+    habitat.position.set(slot.x, 0, slot.z);
+    habitatHall.add(habitat);
+    const baseMaterial = stdMat(0x17242a, {
+      metalness: 0.72,
+      roughness: 0.42,
+      emissive: spec.accent,
+      emissiveIntensity: 0.28,
+    });
+    const base = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.48, 4.05), baseMaterial);
+    base.position.y = 0.52;
+    habitat.add(base);
+    const substrate = new THREE.Mesh(
+      new THREE.BoxGeometry(3.5, 0.15, 3.5),
+      stdMat(spec.substrate, { roughness: 0.94, emissive: spec.color, emissiveIntensity: 0.12 })
+    );
+    substrate.position.y = 0.83;
+    habitat.add(substrate);
+    const glassMaterial = new THREE.MeshPhysicalMaterial({
+      color: index % 2 === 0 ? 0x9df8ff : 0xd5bdff,
+      transparent: true,
+      opacity: 0.16,
+      transmission: 0.32,
+      thickness: 0.18,
+      roughness: 0.08,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const glassCube = new THREE.Mesh(new THREE.BoxGeometry(3.9, 3.65, 3.9), glassMaterial);
+    glassCube.position.y = 2.55;
+    glassCube.renderOrder = 3;
+    habitat.add(glassCube);
+    const glassEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(glassCube.geometry),
+      new THREE.LineBasicMaterial({ color: spec.accent, transparent: true, opacity: 0.72, toneMapped: false })
+    );
+    glassEdges.position.copy(glassCube.position);
+    habitat.add(glassEdges);
+    for (let propIndex = 0; propIndex < 3; propIndex++) {
+      const prop = new THREE.Mesh(
+        index % 2 === 0
+          ? new THREE.ConeGeometry(0.16 + propIndex * 0.04, 0.62 + propIndex * 0.16, 6)
+          : new THREE.DodecahedronGeometry(0.2 + propIndex * 0.07, 0),
+        stdMat(propIndex % 2 === 0 ? spec.accent : spec.color, {
+          roughness: 0.58,
+          emissive: spec.accent,
+          emissiveIntensity: 0.26,
+        })
+      );
+      prop.position.set(-1.1 + propIndex * 1.08, 1.08 + propIndex * 0.05, 1.05 - (propIndex % 2) * 2.05);
+      habitat.add(prop);
+    }
+    const creatureRuntime = createSpecimenCreature(spec, index);
+    habitat.add(creatureRuntime.group);
+    creatureRuntimes.push(creatureRuntime);
+    const label = makeLabelSprite(spec.name, index % 2 === 0 ? '#a6ffe8' : '#e2c5ff');
+    label.position.set(0, 4.82, 0);
+    label.scale.set(4.15, 0.68, 1);
+    habitat.add(label);
+  });
 
-  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.35), stdMat(0xffbb66, { emissive: 0xffbb66, emissiveIntensity: 1 }));
-  glow.position.y = 2.9;
-  group.add(glow);
+  const moteCount = isTouchDevice ? 70 : 120;
+  const motePositions = new Float32Array(moteCount * 3);
+  for (let index = 0; index < moteCount; index++) {
+    const angle = index * 2.399963;
+    const radius = 3.8 + (index % 17) * 0.52;
+    motePositions[index * 3] = Math.cos(angle) * radius;
+    motePositions[index * 3 + 1] = 5.5 + (index % 23) * 0.72;
+    motePositions[index * 3 + 2] = Math.sin(angle) * radius;
+  }
+  const moteGeometry = new THREE.BufferGeometry();
+  moteGeometry.setAttribute('position', new THREE.BufferAttribute(motePositions, 3));
+  const moteMaterial = new THREE.PointsMaterial({
+    color: 0x8affd8,
+    size: isTouchDevice ? 0.16 : 0.12,
+    transparent: true,
+    opacity: 0.54,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const bioMotes = new THREE.Points(moteGeometry, moteMaterial);
+  group.add(bioMotes);
 
-  const light = new THREE.PointLight(0xffaa55, 2, 30);
-  light.position.y = 4;
-  group.add(light);
+  const cyanLight = new THREE.PointLight(0x70f4ff, 4.4, 28, 2);
+  cyanLight.position.set(-7.5, 7.2, 0);
+  group.add(cyanLight);
+  const violetLight = new THREE.PointLight(0xc68aff, 3.8, 26, 2);
+  violetLight.position.set(7.5, 6.2, -1.5);
+  group.add(violetLight);
+  const landmarkLabel = makeLabelSprite('ARES XENOBIOLOGY GLOBE · LIVING SPECIMENS', '#9effe7');
+  landmarkLabel.position.set(0, 32.4, 0);
+  landmarkLabel.scale.set(10.4, 1.28, 1);
+  group.add(landmarkLabel);
 
-  return { group };
+  addCollider(hub.x, hub.z, 2.2);
+  return {
+    group,
+    globe,
+    globeMaterial,
+    globeRibs,
+    creatureRuntimes,
+    bioMotes,
+    moteMaterial,
+    cyanLight,
+    violetLight,
+  };
 }
 
 function buildCrashSite(hub) {
   const baseY = getTerrainHeight(hub.x, hub.z);
   const group = new THREE.Group();
-  group.name = "Caitlin's contact relay · crashed orbital satellite";
+  group.name = 'Ares III weather relay · crashed orbital satellite';
   placeSurfaceGroup(group, hub.normal);
 
   const charMaterial = stdMat(0x18191a, { metalness: 0.42, roughness: 0.88, flatShading: true });
@@ -3074,7 +3499,7 @@ function buildCrashSite(hub) {
     if (debrisIndex < 4) addCollider(hub.x + dx, hub.z + dz, 0.55);
   }
 
-  const label = makeLabelSprite("CRASHED ORBITAL SATELLITE · CAITLIN'S CONTACT RELAY", '#ffe0b8');
+  const label = makeLabelSprite('CRASHED ORBITAL SATELLITE · ARES III WEATHER RELAY', '#ffe0b8');
   label.position.set(0, 7.4, -0.3);
   label.scale.set(9.5, 1.15, 1);
   group.add(label);
@@ -3547,6 +3972,10 @@ const caveChamberHeading = new THREE.Vector3(0, 0, -1);
 const caveSamplePoint = new THREE.Vector3();
 const caveSampleTangent = new THREE.Vector3();
 const caveSampleRight = new THREE.Vector3();
+const caveRoverTargetPosition = new THREE.Vector3();
+const caveEntryWorldPosition = new THREE.Vector3();
+const caveEntryWorldQuaternion = new THREE.Quaternion();
+let caveEntryBlend = 1;
 let caveDarkness = 0;
 let caveWasInside = false;
 let caveChamberDiscovered = false;
@@ -3567,21 +3996,33 @@ function placeCaveRover(dt) {
   caveWorldForward.copy(caveLocalForward).transformDirection(runtime.group.matrixWorld).normalize();
   caveWorldUp.copy(caveLocalUp).transformDirection(runtime.group.matrixWorld).normalize();
   caveWorldRight.crossVectors(caveWorldForward, caveWorldUp).normalize();
-  alien.position.copy(caveLocalPosition).addScaledVector(caveLocalUp, jumpHeight);
-  runtime.group.localToWorld(alien.position);
+  caveRoverTargetPosition.copy(caveLocalPosition).addScaledVector(caveLocalUp, jumpHeight);
+  runtime.group.localToWorld(caveRoverTargetPosition);
   orientationMatrix.makeBasis(caveWorldRight, caveWorldUp, caveWorldForward.clone().multiplyScalar(-1));
   targetRoverQuaternion.setFromRotationMatrix(orientationMatrix);
-  alien.quaternion.slerp(targetRoverQuaternion, 1 - Math.exp(-dt * 12));
+  if (caveEntryBlend < 1) {
+    caveEntryBlend = Math.min(1, caveEntryBlend + dt / 0.68);
+    const blend = caveEntryBlend * caveEntryBlend * (3 - 2 * caveEntryBlend);
+    alien.position.lerpVectors(caveEntryWorldPosition, caveRoverTargetPosition, blend);
+    alien.quaternion.copy(caveEntryWorldQuaternion).slerp(targetRoverQuaternion, blend);
+  } else {
+    alien.position.copy(caveRoverTargetPosition);
+    alien.quaternion.slerp(targetRoverQuaternion, 1 - Math.exp(-dt * 12));
+  }
 }
 
 function enterNightfallDescent() {
   drivingCourses.reset();
   drivingCoursePrompt = '';
   activeDrivingCourse = null;
+  caveEntryWorldPosition.copy(alien.position);
+  caveEntryWorldQuaternion.copy(alien.quaternion);
+  caveEntryBlend = 0;
   caveTravelZone = 'tunnel';
-  caveRouteDistance = 0.5;
+  caveRouteDistance = 0.08;
   caveRouteFacing = 1;
   caveLateral = 0;
+  sampleCaveRoute(caveRouteDistance);
   jumpHeight = 0;
   verticalVelocity = 0;
   grounded = true;
@@ -3722,10 +4163,6 @@ function updateCaveAtmosphere(dt, listenerNormal) {
     targetDarkness = (1 - THREE.MathUtils.smoothstep(entranceDistance, 0, 5)) * 0.2;
   }
   caveDarkness = THREE.MathUtils.damp(caveDarkness, targetDarkness, 5.5, dt);
-  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, 0.58, caveDarkness);
-  hemisphereLight.intensity = THREE.MathUtils.lerp(hemisphereLight.intensity, 0.018, caveDarkness);
-  sunLight.intensity = THREE.MathUtils.lerp(sunLight.intensity, 0.025, caveDarkness);
-  ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.026, caveDarkness);
   if (caveDarkness > 0.03) {
     caveFog.density = THREE.MathUtils.lerp(0.002, 0.0075, caveDarkness);
     scene.fog = caveFog;
@@ -3741,7 +4178,7 @@ HUBS.forEach((hub) => {
   hub.discovered = false;
   if (hub.key === 'outpost') hubRuntime[hub.key] = buildResearchOutpost(hub);
   if (hub.key === 'cavern') hubRuntime[hub.key] = buildCrystalCavern(hub);
-  if (hub.key === 'ruins') hubRuntime[hub.key] = buildAncientRuins(hub);
+  if (hub.key === 'planetarium') hubRuntime[hub.key] = buildMarsXenobiologyGlobe(hub);
   if (hub.key === 'crash') hubRuntime[hub.key] = buildCrashSite(hub);
   if (hub.key === 'nightfall') hubRuntime[hub.key] = buildNightfallCave(hub);
 });
@@ -5800,6 +6237,14 @@ function buildAlien() {
   const limbMaterial = new THREE.MeshPhysicalMaterial({ color: 0x668b42, roughness: 0.76, clearcoat: 0.08 });
   const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x4c6c32, roughness: 0.9 });
   const detailMaterial = new THREE.MeshStandardMaterial({ color: 0x405b30, roughness: 0.92 });
+  const sneakerRedMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xd92332,
+    roughness: 0.48,
+    clearcoat: 0.32,
+    clearcoatRoughness: 0.42,
+  });
+  const sneakerSoleMaterial = new THREE.MeshStandardMaterial({ color: 0xf4ede2, roughness: 0.7 });
+  const sneakerLaceMaterial = new THREE.MeshBasicMaterial({ color: 0xfff8eb, toneMapped: false });
   const eyeMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x010404,
     roughness: 0.025,
@@ -5831,10 +6276,24 @@ function buildAlien() {
     shinMesh.position.y = -shinLen / 2;
     shin.add(shinMesh);
 
-    const foot = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 10), limbMaterial);
-    foot.scale.set(1.1, 0.55, 1.6);
-    foot.position.set(0, -shinLen, -0.09);
-    shin.add(foot);
+    const sneaker = new THREE.Group();
+    sneaker.name = 'Red Martian sneaker';
+    sneaker.position.set(0, -shinLen, -0.09);
+    const sneakerUpper = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 10), sneakerRedMaterial);
+    sneakerUpper.position.y = 0.025;
+    sneakerUpper.scale.set(1.2, 0.7, 1.72);
+    sneaker.add(sneakerUpper);
+    const sneakerSole = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 8), sneakerSoleMaterial);
+    sneakerSole.position.set(0, -0.055, -0.015);
+    sneakerSole.scale.set(1.22, 0.2, 1.7);
+    sneaker.add(sneakerSole);
+    for (let laceIndex = 0; laceIndex < 3; laceIndex++) {
+      const lace = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.018, 0.025), sneakerLaceMaterial);
+      lace.position.set(0, 0.14, -0.12 + laceIndex * 0.08);
+      lace.rotation.y = laceIndex % 2 === 0 ? 0.08 : -0.08;
+      sneaker.add(lace);
+    }
+    shin.add(sneaker);
 
     thigh.add(shin);
     alien.add(thigh);
@@ -6387,6 +6846,7 @@ let footSpeed = 0;
 let footJumpHeight = 0;
 let footVerticalVelocity = 0;
 let footGrounded = true;
+const WALK_SPEED_BY_WORLD = { mars: 8.4, moon: 6.4, zephyra: 7.6 };
 const FOOT_THRUSTER_FUEL_MAX = 3.2;
 const ROVER_THRUSTER_FUEL_MAX = 5.5;
 let footThrusterFuel = FOOT_THRUSTER_FUEL_MAX;
@@ -6822,6 +7282,7 @@ function warpToMarsStart() {
   caveLocalPosition.copy(CAVE_ROUTE_POINTS[0]);
   caveLocalForward.set(0, 0, -1);
   caveLocalUp.copy(UP);
+  caveEntryBlend = 1;
   playerNormal.copy(START_NORMAL);
   playerHeading.set(0, 0, -1);
   currentWorld = 'mars';
@@ -6904,35 +7365,40 @@ caveWarpButtonEl.addEventListener('click', (e) => {
   warpToMarsStart();
 });
 
-/* ---------- portfolio panel ---------- */
+/* ---------- in-world project archive ---------- */
 
-const portfolioPanelEl = document.getElementById('portfolio-panel');
-const portfolioGridEl = document.getElementById('portfolio-grid');
-PROJECTS.forEach((p) => {
-  const card = document.createElement('div');
-  card.className = 'project-card';
-  card.innerHTML = `
-    <div class="project-preview-shell">
-      <img class="project-preview" src="${p.preview}" alt="Snapshot of ${p.title}" loading="lazy" referrerpolicy="no-referrer">
-      <span>LIVE SITE SNAPSHOT</span>
-    </div>
-    <div class="project-card-body">
-      <h3>${p.title}</h3>
-      <p>${p.desc}</p>
-      <a href="${p.url}" target="_blank" rel="noopener noreferrer">${p.label} <b aria-hidden="true">↗</b></a>
-    </div>`;
-  card.querySelector('.project-preview').addEventListener('error', () => card.classList.add('preview-unavailable'), { once: true });
-  portfolioGridEl.appendChild(card);
-});
 const PORTFOLIO_HUB_KEY = 'outpost';
-const PORTFOLIO_REVEAL_RADIUS = 11.5;
+const PORTFOLIO_REVEAL_RADIUS = 11.5 * PROJECT_SHIP_SCALE;
 let ufoInteriorActive = false;
 let ufoProjectScreensRequested = false;
+const projectRampCenterNormal = new THREE.Vector3();
 
 function isNearUfoEntry(normal) {
   if (currentWorld !== 'mars' || !normal) return false;
   const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
   return arcDistanceForWorld('mars', normal, portfolioHub.normal) < PORTFOLIO_REVEAL_RADIUS;
+}
+
+function projectRampDeckLift(normal) {
+  if (currentWorld !== 'mars' || !normal) return 0;
+  const ramp = hubRuntime.outpost?.rampSurface;
+  if (!ramp) return 0;
+  const alongAngle = Math.atan2(normal.dot(ramp.forwardStart), normal.dot(ramp.startNormal));
+  if (alongAngle < -0.012 || alongAngle > ramp.arcAngle + 0.025) return 0;
+  const routeRatio = THREE.MathUtils.clamp(alongAngle / ramp.arcAngle, 0, 1);
+  if (ramp.arcAngle < 0.0001) {
+    projectRampCenterNormal.copy(ramp.startNormal);
+  } else {
+    const sinAngle = Math.sin(ramp.arcAngle);
+    projectRampCenterNormal.copy(ramp.startNormal)
+      .multiplyScalar(Math.sin((1 - routeRatio) * ramp.arcAngle) / sinAngle)
+      .addScaledVector(ramp.endNormal, Math.sin(routeRatio * ramp.arcAngle) / sinAngle)
+      .normalize();
+  }
+  const lateralDistance = Math.acos(THREE.MathUtils.clamp(normal.dot(projectRampCenterNormal), -1, 1)) * PLANET_RADIUS;
+  if (lateralDistance > ramp.halfWidth + 0.24) return 0;
+  const terrainContact = THREE.MathUtils.smoothstep(routeRatio, 0, 0.46);
+  return THREE.MathUtils.lerp(ramp.startLift, ramp.endLift, terrainContact);
 }
 
 function loadUfoProjectScreens() {
@@ -6941,6 +7407,10 @@ function loadUfoProjectScreens() {
   const textureLoader = new THREE.TextureLoader();
   textureLoader.setCrossOrigin('anonymous');
   hubRuntime.outpost.projectScreens.forEach((screen) => {
+    if (!screen.project.preview) {
+      screen.loaded = true;
+      return;
+    }
     textureLoader.load(screen.project.preview, (texture) => {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
@@ -6954,6 +7424,57 @@ function loadUfoProjectScreens() {
     });
   });
 }
+
+const projectScreenRaycaster = new THREE.Raycaster();
+const projectScreenPointer = new THREE.Vector2(2, 2);
+let hoveredProjectScreen = null;
+
+function setHoveredProjectScreen(nextScreen) {
+  if (hoveredProjectScreen === nextScreen) return;
+  if (hoveredProjectScreen) {
+    hoveredProjectScreen.frameMaterial.emissiveIntensity = 0.32;
+    hoveredProjectScreen.material.color.set(0xffffff);
+  }
+  hoveredProjectScreen = nextScreen;
+  if (hoveredProjectScreen) {
+    hoveredProjectScreen.frameMaterial.emissiveIntensity = 1.25;
+    hoveredProjectScreen.material.color.set(0xd8f8ff);
+  }
+  renderer.domElement.style.cursor = hoveredProjectScreen ? 'pointer' : '';
+}
+
+function projectScreenFromPointer(event) {
+  if (!ufoInteriorActive) return null;
+  const bounds = renderer.domElement.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return null;
+  projectScreenPointer.set(
+    ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+    -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+  );
+  projectScreenRaycaster.setFromCamera(projectScreenPointer, camera);
+  const targets = hubRuntime.outpost.projectScreens.map((entry) => entry.screen);
+  const hit = projectScreenRaycaster.intersectObjects(targets, false)[0];
+  return hit ? hubRuntime.outpost.projectScreens[hit.object.userData.projectScreenIndex] : null;
+}
+
+function openProjectLive(projectScreen) {
+  if (!projectScreen) return;
+  const liveWindow = window.open(projectScreen.project.url, '_blank', 'noopener,noreferrer');
+  if (liveWindow) liveWindow.opener = null;
+  showBanner(projectScreen.project.kind === 'contact'
+    ? 'CONTACT TERMINAL · OPENING EMAIL TO CAITLIN'
+    : `OPENING LIVE · ${projectScreen.project.title.toUpperCase()}`);
+}
+
+renderer.domElement.addEventListener('pointermove', (event) => {
+  setHoveredProjectScreen(projectScreenFromPointer(event));
+});
+renderer.domElement.addEventListener('pointerleave', () => setHoveredProjectScreen(null));
+renderer.domElement.addEventListener('click', (event) => {
+  if (!ufoInteriorActive) return;
+  const selectedScreen = projectScreenFromPointer(event);
+  if (selectedScreen) openProjectLive(selectedScreen);
+});
 
 function enterUfoInterior() {
   if (travelMode !== 'walking' || !isNearUfoEntry(footNormal)) return;
@@ -6971,39 +7492,22 @@ function enterUfoInterior() {
 
 function exitUfoInterior() {
   if (!ufoInteriorActive) return;
+  setHoveredProjectScreen(null);
   ufoInteriorActive = false;
   hubRuntime.outpost.interiorGallery.visible = false;
   const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
   const towardLanding = START_NORMAL.clone()
     .addScaledVector(portfolioHub.normal, -START_NORMAL.dot(portfolioHub.normal))
     .normalize();
-  footNormal.copy(stepWorldNormal(portfolioHub.normal, towardLanding, 10.5, PLANET_RADIUS));
+  footNormal.copy(stepWorldNormal(portfolioHub.normal, towardLanding, 10.5 * PROJECT_SHIP_SCALE, PLANET_RADIUS));
   footHeading.copy(portfolioHub.normal)
     .addScaledVector(footNormal, -portfolioHub.normal.dot(footNormal))
     .normalize();
-  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, projectRampDeckLift(footNormal) + 0.04));
   orientSurfaceRoot(footRoot, footNormal, footHeading);
   footRoot.visible = true;
   showBanner('UFO HATCH OPEN · RETURNED TO MARS');
 }
-
-const CONTACT_LINKS = [
-  { label: 'Email', desc: 'baxc1722@gmail.com', url: 'mailto:baxc1722@gmail.com' },
-  { label: 'GitHub', desc: 'github.com/HuskyWusky158', url: 'https://github.com/HuskyWusky158' },
-  { label: 'LinkedIn', desc: 'linkedin.com/in/caitlinbax325', url: 'https://www.linkedin.com/in/caitlinbax325/' },
-  { label: 'Resume', desc: 'Download PDF', url: 'https://caitlin-portfolio-weld.vercel.app/resume.pdf' },
-];
-
-const contactPanelEl = document.getElementById('contact-panel');
-const contactGridEl = document.getElementById('contact-grid');
-CONTACT_LINKS.forEach((c) => {
-  const card = document.createElement('div');
-  card.className = 'project-card contact-card';
-  card.innerHTML = `<h3>${c.label}</h3><p>${c.desc}</p><a href="${c.url}" target="_blank" rel="noopener noreferrer">Open</a>`;
-  contactGridEl.appendChild(card);
-});
-const CONTACT_HUB_KEY = 'crash';
-const CONTACT_REVEAL_RADIUS = 13;
 
 /* ---------- HUD ---------- */
 
@@ -7491,9 +7995,9 @@ function attachAlienOnFoot(world, normal, heading) {
   orientSurfaceRoot(footRoot, footNormal, footHeading);
 }
 
-// Begin on foot within sight of the motor cavern instead of pre-simulating a
-// vehicle. Every parked craft remains a static scene object until it is chosen.
-attachAlienOnFoot('mars', GARAGE_SPAWN_NORMAL, GARAGE_SPAWN_HEADING);
+// Every surface expedition begins at the shared trailhead. The garage remains
+// a short walk away, and every dirt route radiates from this exact point.
+attachAlienOnFoot('mars', START_NORMAL, playerHeading);
 
 function exitActiveVehicle() {
   if (!activeVehicle || !activeProfile) return;
@@ -7759,6 +8263,7 @@ function updateHyperBikeTravel(dt, time) {
 }
 
 function startScheduledShuttleTrip() {
+  const playerWasNearDepartingBus = isPlayerNearCurrentShuttlePad();
   const destination = shuttleLocation === 'mars' ? 'moon' : 'mars';
   const start = (shuttleLocation === 'mars' ? MARS_DOCK_POSITION : MOON_DOCK_POSITION).clone();
   const end = (destination === 'mars' ? MARS_DOCK_POSITION : MOON_DOCK_POSITION).clone();
@@ -7780,7 +8285,7 @@ function startScheduledShuttleTrip() {
     camera.up.copy(UP);
     camLookTarget.copy(start).addScaledVector(departureDirection, 2.5);
     showBanner(`SPACE BUS DEPARTING · NEXT STOP ${destination.toUpperCase()}`);
-  } else if (currentWorld === shuttleLocation) {
+  } else if (currentWorld === shuttleLocation && playerWasNearDepartingBus) {
     showBanner(`SPACE BUS DEPARTED · YOU MISSED IT`);
   }
 }
@@ -7883,12 +8388,16 @@ function shuttleEtaToWorld(world) {
 function isPlayerNearLandedShuttle() {
   if (travelMode === 'boarded') return true;
   if (shuttleTransit || shuttleLocation !== currentWorld) return false;
+  return isPlayerNearCurrentShuttlePad();
+}
+
+function isPlayerNearCurrentShuttlePad(radius = SHUTTLE_STATUS_RADIUS) {
   if (travelMode === 'driving' && shuttleLocation === 'mars') {
-    return geodesicDistance(playerNormal, MARS_PORT.normal) < SHUTTLE_STATUS_RADIUS;
+    return geodesicDistance(playerNormal, MARS_PORT.normal) < radius;
   }
   if (travelMode === 'walking') {
     const padNormal = currentWorld === 'moon' ? MOON_PAD_NORMAL : MARS_PORT.normal;
-    return arcDistanceForWorld(currentWorld, footNormal, padNormal) < SHUTTLE_STATUS_RADIUS;
+    return arcDistanceForWorld(currentWorld, footNormal, padNormal) < radius;
   }
   return false;
 }
@@ -7947,7 +8456,7 @@ function updateShuttleFlight(dt, time) {
     shuttleDisplaySpeed = 0;
     if (travelMode === 'boarded') {
       showBanner(`${shuttleLocation.toUpperCase()} ARRIVAL · 10 SEC TO DISEMBARK`);
-    } else if (currentWorld === shuttleLocation) {
+    } else if (currentWorld === shuttleLocation && isPlayerNearCurrentShuttlePad()) {
       showBanner(`SPACE BUS LANDED · DEPARTS IN 10 SEC`);
     }
   }
@@ -7966,8 +8475,8 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     return;
   }
   const radius = currentWorld === 'moon' ? MOON_RADIUS : currentWorld === 'zephyra' ? ZEPHYRA_RADIUS : PLANET_RADIUS;
-  const walkTarget = throttleInput * (currentWorld === 'moon' ? 3.8 : currentWorld === 'zephyra' ? 4.4 : 4.8);
-  footSpeed = THREE.MathUtils.damp(footSpeed, walkTarget, throttleInput === 0 ? 6 : 8, dt);
+  const walkTarget = throttleInput * (WALK_SPEED_BY_WORLD[currentWorld] || WALK_SPEED_BY_WORLD.mars);
+  footSpeed = THREE.MathUtils.damp(footSpeed, walkTarget, throttleInput === 0 ? 6.5 : 11.5, dt);
   footHeading.applyAxisAngle(footNormal, steeringInput * 2.15 * dt).normalize();
 
   if (Math.abs(footSpeed) > 0.01) {
@@ -8036,7 +8545,8 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     footThrusterFuel = Math.min(FOOT_THRUSTER_FUEL_MAX, footThrusterFuel + dt * 1.8);
   }
 
-  footRoot.position.copy(surfacePositionForWorld(currentWorld, footNormal, footJumpHeight + 0.04));
+  const walkableRampLift = currentWorld === 'mars' ? projectRampDeckLift(footNormal) : 0;
+  footRoot.position.copy(surfacePositionForWorld(currentWorld, footNormal, walkableRampLift + footJumpHeight + 0.04));
   orientSurfaceRoot(footRoot, footNormal, footHeading);
   if (currentWorld === 'moon' && footGrounded && Math.abs(footSpeed) > 0.32) {
     moonFootprintTravel += Math.abs(footSpeed) * dt;
@@ -8049,7 +8559,11 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     moonFootprintTravel = 0;
   }
 
-  const walkAmount = THREE.MathUtils.clamp(Math.abs(footSpeed) / 4.8, 0, 1);
+  const walkAmount = THREE.MathUtils.clamp(
+    Math.abs(footSpeed) / (WALK_SPEED_BY_WORLD[currentWorld] || WALK_SPEED_BY_WORLD.mars),
+    0,
+    1
+  );
   const stride = Math.sin(time * (5.6 + walkAmount * 3.2)) * walkAmount;
   legs.forEach((leg, index) => {
     const side = index === 0 ? 1 : -1;
@@ -8076,7 +8590,7 @@ function updateTravelPrompt() {
     else if (caveTravelZone === 'chamber') setInteractionPrompt(`MORROW: ${hubRuntime.nightfall.bearActivity.toUpperCase()} · R OR BUTTON TO WARP HOME`);
     else if (drivingCoursePrompt) setInteractionPrompt(`${drivingCoursePrompt} · E EXIT`);
     else if (arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) < 34) {
-      setInteractionPrompt('3 MARS COURSES · FOLLOW COLORED SKY BEACONS · E EXIT');
+      setInteractionPrompt(`${drivingCourses.courses.length} MARS COURSES · FOLLOW COLORED SKY BEACONS · E EXIT`);
     }
     else setInteractionPrompt(Math.abs(driveSpeed) < (activeProfile?.exitSpeed || 1.2) && grounded
       ? `E · EXIT ${activeVehicle?.label || 'VEHICLE'}`
@@ -8102,7 +8616,9 @@ function updateTravelPrompt() {
     return;
   }
   if (ufoInteriorActive) {
-    setInteractionPrompt('E · EXIT CRASHED UFO  /  SELECT ANY PROJECT SCREEN');
+    setInteractionPrompt(hoveredProjectScreen
+      ? `CLICK · OPEN ${hoveredProjectScreen.project.title.toUpperCase()} LIVE  /  E · EXIT`
+      : 'E · EXIT CRASHED UFO  /  CLICK ANY PROJECT SCREEN');
     return;
   }
   if (currentWorld === 'mars' && isNearUfoEntry(footNormal)) {
@@ -8420,11 +8936,7 @@ function updateLunarLighting(dt, time) {
   moonSunLight.visible = moonLightingBlend > 0.004;
   moonBounceLight.intensity = moonLightingBlend * 0.2;
   moonEarthLight.intensity = moonLightingBlend * 0.14;
-  hemisphereLight.intensity = THREE.MathUtils.lerp(0.85, 0.1, moonLightingBlend);
-  sunLight.intensity = THREE.MathUtils.lerp(1.8, 0.08, moonLightingBlend);
-  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.025, moonLightingBlend);
   moonSurface.material.emissiveIntensity = THREE.MathUtils.lerp(0.22, 0.025, moonLightingBlend);
-  renderer.toneMappingExposure = THREE.MathUtils.lerp(renderer.toneMappingExposure, 0.98, moonLightingBlend);
 
   const earthVisibility = THREE.MathUtils.smoothstep(moonLightingBlend, 0.015, 0.48);
   earthriseRuntime.group.visible = earthVisibility > 0.004;
@@ -8445,6 +8957,33 @@ function updateLunarLighting(dt, time) {
   moonSunLight.position.copy(moonLightingFocus).addScaledVector(moonSolarDirection, 72);
   moonEarthLightTarget.position.copy(moonLightingFocus);
   moonEarthLight.position.copy(earthriseRuntime.group.position);
+}
+
+// Compose the planet, weather, and cave lighting once per render frame. Weather
+// simulation is intentionally throttled for performance; applying its light
+// multipliers inside that slower update made the scene alternate between clear
+// and storm exposure on consecutive frames.
+function applyGlobalLighting() {
+  const marsSurfaceActive = (
+    (travelMode === 'driving' && caveTravelZone === 'surface')
+    || (travelMode === 'walking' && currentWorld === 'mars')
+  );
+  const dustBlend = marsSurfaceActive ? marsDustStormBlend * (1 - caveDarkness) : 0;
+
+  let hemisphereIntensity = THREE.MathUtils.lerp(0.85, 0.1, moonLightingBlend);
+  let sunIntensity = THREE.MathUtils.lerp(1.8, 0.08, moonLightingBlend);
+  let ambientIntensity = THREE.MathUtils.lerp(0.16, 0.025, moonLightingBlend);
+  let exposure = THREE.MathUtils.lerp(1.12, 0.98, moonLightingBlend);
+
+  sunIntensity *= THREE.MathUtils.lerp(1, 0.38, dustBlend);
+  hemisphereIntensity *= THREE.MathUtils.lerp(1, 0.58, dustBlend);
+  ambientIntensity *= THREE.MathUtils.lerp(1, 0.72, dustBlend);
+  exposure *= THREE.MathUtils.lerp(1, 0.78, dustBlend);
+
+  sunLight.intensity = THREE.MathUtils.lerp(sunIntensity, 0.025, caveDarkness);
+  hemisphereLight.intensity = THREE.MathUtils.lerp(hemisphereIntensity, 0.018, caveDarkness);
+  ambientLight.intensity = THREE.MathUtils.lerp(ambientIntensity, 0.026, caveDarkness);
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(exposure, 0.58, caveDarkness);
 }
 
 /* ---------- animation loop ---------- */
@@ -8694,10 +9233,114 @@ function updateDrivingCourseGameplay(dt, time) {
 // Focused live-test entry point. It is inert during normal play, but lets the
 // performance overlay and browser QA boot directly into one chosen physics rig.
 const vehicleQaId = performanceQuery.get('vehicle-qa');
+const signQaHub = HUBS.find((hub) => hub.key === performanceQuery.get('sign-qa'));
+if (signQaHub) {
+  const signQaTrailDistance = geodesicDistance(START_NORMAL, signQaHub.normal);
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(slerpNormals(START_NORMAL, signQaHub.normal, 3.3 / signQaTrailDistance));
+  footHeading.copy(signQaHub.normal)
+    .addScaledVector(footNormal, -signQaHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  lookingAtCamera = false;
+}
+if (performanceQuery.has('garage-roof-qa')) {
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(stepWorldNormal(GARAGE_NORMAL, GARAGE_OUTWARD_HEADING, 34, PLANET_RADIUS));
+  footHeading.copy(GARAGE_NORMAL)
+    .addScaledVector(footNormal, -GARAGE_NORMAL.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  lookingAtCamera = false;
+}
+if (performanceQuery.has('shuttle-countdown-qa')) {
+  const padApproach = START_NORMAL.clone()
+    .addScaledVector(MARS_PORT.normal, -START_NORMAL.dot(MARS_PORT.normal))
+    .normalize();
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(stepWorldNormal(MARS_PORT.normal, padApproach, 7, PLANET_RADIUS));
+  footHeading.copy(MARS_PORT.normal)
+    .addScaledVector(footNormal, -MARS_PORT.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  lookingAtCamera = false;
+}
+if (performanceQuery.has('ufo-shop-qa')) {
+  const shopHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const shopApproach = START_NORMAL.clone()
+    .addScaledVector(shopHub.normal, -START_NORMAL.dot(shopHub.normal))
+    .normalize();
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(stepWorldNormal(shopHub.normal, shopApproach, 60, PLANET_RADIUS));
+  footHeading.copy(shopHub.normal)
+    .addScaledVector(footNormal, -shopHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+}
+if (performanceQuery.has('ufo-ramp-qa')) {
+  const shopHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const rampApproach = START_NORMAL.clone()
+    .addScaledVector(shopHub.normal, -START_NORMAL.dot(shopHub.normal))
+    .normalize();
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(stepWorldNormal(shopHub.normal, rampApproach, 38, PLANET_RADIUS));
+  footHeading.copy(shopHub.normal)
+    .addScaledVector(footNormal, -shopHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  lookingAtCamera = false;
+  keys.w = true;
+}
+if (performanceQuery.has('planetarium-qa') || performanceQuery.has('xenobiology-qa')) {
+  const planetariumHub = HUBS.find((hub) => hub.key === 'planetarium');
+  const planetariumApproach = START_NORMAL.clone()
+    .addScaledVector(planetariumHub.normal, -START_NORMAL.dot(planetariumHub.normal))
+    .normalize();
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(stepWorldNormal(planetariumHub.normal, planetariumApproach, 34, PLANET_RADIUS));
+  footHeading.copy(planetariumHub.normal)
+    .addScaledVector(footNormal, -planetariumHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  lookingAtCamera = false;
+}
+if (performanceQuery.has('ufo-archive-qa')) {
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  ufoInteriorActive = true;
+  footRoot.visible = false;
+  hubRuntime.outpost.interiorGallery.visible = true;
+  loadUfoProjectScreens();
+}
+if (performanceQuery.has('walk-audio-qa')) keys.w = true;
 if (vehicleQaId) {
   const qaVehicle = vehicleRuntimes.find((runtime) => runtime.id === vehicleQaId);
   if (qaVehicle) {
     boardVehicle(qaVehicle);
+    if (performanceQuery.has('cave-entry-qa')) {
+      playerNormal.copy(stepWorldNormal(NIGHTFALL_CAVE.normal, CAVE_INWARD_HEADING, -7.2, PLANET_RADIUS));
+      playerHeading.copy(CAVE_INWARD_HEADING);
+      alien.position.copy(surfaceWorldPosition(playerNormal));
+      alien.quaternion.copy(surfaceVehicleQuaternion(playerNormal, playerHeading));
+      garageDepartureCamera = false;
+      lookingAtCamera = false;
+    }
     const courseQaId = performanceQuery.get('course-qa');
     const courseQa = courseQaId ? drivingCourses.courses.find((course) => course.id === courseQaId) : null;
     if (courseQa) {
@@ -9002,18 +9645,13 @@ function animate() {
     updateNightfallWorld(environmentDt, t);
   }
   updateCaveAtmosphere(dt, activeMarsNormal, activeMarsAltitude);
+  applyGlobalLighting();
 
   if (activeMarsNormal) for (const hub of HUBS) {
     if (!hub.discovered && geodesicDistance(activeMarsNormal, hub.normal) < hub.trigger) {
       discoverHub(hub);
     }
   }
-
-  portfolioPanelEl.classList.toggle('show', ufoInteriorActive);
-
-  const contactHub = HUBS.find((h) => h.key === CONTACT_HUB_KEY);
-  const nearContact = activeMarsNormal && geodesicDistance(activeMarsNormal, contactHub.normal) < CONTACT_REVEAL_RADIUS;
-  contactPanelEl.classList.toggle('show', nearContact);
 
   const downedUfo = hubRuntime.outpost;
   if (worldDetailResidency.mars) {
@@ -9050,7 +9688,7 @@ function animate() {
       spark.mesh.position.set(
         4.72 + Math.sin(spark.phase) * spark.radius * sparkAge,
         1.38 + sparkAge * 2.45,
-        1.3 + Math.cos(spark.phase) * spark.radius * sparkAge
+        Math.cos(spark.phase) * spark.radius * sparkAge
       );
       spark.mesh.scale.setScalar(0.45 + burst * 1.35);
     });
@@ -9059,6 +9697,22 @@ function animate() {
     cavern.crystalMaterials.forEach((mat, i) => {
       mat.emissiveIntensity = 0.5 + Math.sin(t * 1.5 + i) * 0.15;
     });
+
+    const xenobiologyGlobe = hubRuntime.planetarium;
+    xenobiologyGlobe.creatureRuntimes.forEach((creature, index) => {
+      const creaturePulse = t * (creature.type === 'jelly' ? 1.8 : 2.7) + creature.phase;
+      creature.group.position.y = creature.baseY + Math.sin(creaturePulse) * (creature.type === 'jelly' ? 0.22 : 0.06);
+      creature.group.rotation.y += dt * (creature.type === 'snail' ? 0.08 : 0.22 + index * 0.018);
+      creature.body.scale.y = creature.bodyBaseScaleY * (1 + Math.sin(creaturePulse * 1.35) * 0.018);
+      creature.wings.forEach((wing) => {
+        wing.mesh.rotation.z = wing.side * (0.42 + Math.sin(t * 18 + creature.phase) * 0.22);
+      });
+    });
+    xenobiologyGlobe.bioMotes.rotation.y += dt * 0.018;
+    xenobiologyGlobe.moteMaterial.opacity = 0.48 + Math.sin(t * 0.9) * 0.09;
+    xenobiologyGlobe.globeMaterial.emissiveIntensity = 0.34 + Math.sin(t * 0.72) * 0.07;
+    xenobiologyGlobe.cyanLight.intensity = 4.1 + Math.sin(t * 1.2) * 0.5;
+    xenobiologyGlobe.violetLight.intensity = 3.5 + Math.cos(t * 1.05) * 0.45;
 
     const crash = hubRuntime.crash;
     crash.light.intensity = 2.2 + Math.sin(t * 13) * 0.4 + (Math.random() - 0.5) * 0.3;
@@ -9111,11 +9765,18 @@ function animate() {
   if (travelMode === 'driving') {
     if (caveTravelZone === 'tunnel') {
       const cameraOffset = lookingAtCamera ? -5.5 : 8.2;
-      const cameraDistance = THREE.MathUtils.clamp(caveRouteDistance - caveRouteFacing * cameraOffset, 0, CAVE_ROUTE_LENGTH);
+      const unclampedCameraDistance = caveRouteDistance - caveRouteFacing * cameraOffset;
+      const cameraDistance = THREE.MathUtils.clamp(unclampedCameraDistance, 0, CAVE_ROUTE_LENGTH);
       const cameraRatio = cameraDistance / CAVE_ROUTE_LENGTH;
       caveCameraLocal.copy(CAVE_ROUTE_CURVE.getPointAt(cameraRatio));
       caveCameraTangent.copy(CAVE_ROUTE_CURVE.getTangentAt(cameraRatio)).normalize();
       caveCameraRight.crossVectors(caveCameraTangent, UP).normalize();
+      // Extrapolate behind the mouth instead of pinning the camera directly
+      // over it, so the rover stays framed throughout the downhill handoff.
+      if (unclampedCameraDistance < 0) caveCameraLocal.addScaledVector(caveCameraTangent, unclampedCameraDistance);
+      else if (unclampedCameraDistance > CAVE_ROUTE_LENGTH) {
+        caveCameraLocal.addScaledVector(caveCameraTangent, unclampedCameraDistance - CAVE_ROUTE_LENGTH);
+      }
       caveCameraLocal.addScaledVector(caveCameraRight, caveLateral).addScaledVector(UP, lookingAtCamera ? 3.5 : 4.1);
       desiredCamPos = caveCameraLocal.clone();
       hubRuntime.nightfall.group.localToWorld(desiredCamPos);
@@ -9146,12 +9807,28 @@ function animate() {
       desiredCameraUp = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY).normal;
     } else {
       const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
+      const garageCameraDistance = currentWorld === 'mars'
+        ? arcDistanceForWorld('mars', footNormal, GARAGE_NORMAL)
+        : Infinity;
+      const garageCameraBlend = 1 - THREE.MathUtils.smoothstep(garageCameraDistance, 9, 22);
       let cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 8.5 : 10.5, lookingAtCamera ? 4.3 : 4.6, interiorCameraBlend);
       let cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 8 : -11, lookingAtCamera ? 6.2 : -7.5, interiorCameraBlend);
       cameraHeight = THREE.MathUtils.lerp(cameraHeight, lookingAtCamera ? 4.7 : 4.65, moonCommandInterior);
       cameraTrail = THREE.MathUtils.lerp(cameraTrail, lookingAtCamera ? 4.2 : -2.8, moonCommandInterior);
-      const commandTargetHeight = THREE.MathUtils.lerp(2.2, 2.5, moonCommandInterior);
-      const commandTargetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 2.2, lookingAtCamera ? 0 : 2.8, moonCommandInterior);
+      // Duck the walking camera under the motor-cavern ceiling before it can
+      // intersect the roof. The gradual blend prevents a visible camera pop.
+      cameraHeight = THREE.MathUtils.lerp(cameraHeight, lookingAtCamera ? 4.15 : 4.25, garageCameraBlend);
+      cameraTrail = THREE.MathUtils.lerp(cameraTrail, lookingAtCamera ? 5.2 : -5.8, garageCameraBlend);
+      const commandTargetHeight = THREE.MathUtils.lerp(
+        THREE.MathUtils.lerp(2.2, 2.5, moonCommandInterior),
+        2.05,
+        garageCameraBlend
+      );
+      const commandTargetLead = THREE.MathUtils.lerp(
+        THREE.MathUtils.lerp(lookingAtCamera ? 0 : 2.2, lookingAtCamera ? 0 : 2.8, moonCommandInterior),
+        lookingAtCamera ? 0 : 1.8,
+        garageCameraBlend
+      );
       desiredCamPos = footRoot.position.clone()
         .addScaledVector(footNormal, cameraHeight)
         .addScaledVector(footHeading, cameraTrail);
@@ -9291,7 +9968,7 @@ function animate() {
     shuttleStatusEl.classList.remove('urgent');
   } else {
     const remaining = Math.max(1, Math.ceil(shuttleDockTimer));
-    shuttleStatusTextEl.textContent = `SPACE BUS · ${shuttleLocation.toUpperCase()} ${remaining} SEC`;
+    shuttleStatusTextEl.textContent = `SPACE BUS · DEPARTS IN ${remaining} SEC`;
     shuttleRouteBusEl.style.left = shuttleLocation === 'mars' ? '0%' : '100%';
     shuttleStatusEl.classList.toggle('urgent', remaining <= 3);
   }

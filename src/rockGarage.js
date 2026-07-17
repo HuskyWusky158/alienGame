@@ -113,14 +113,14 @@ export function buildRockGarage({
   const rockBlocks = [];
   const addRock = (x, y, z, sx, sy, sz, color) => rockBlocks.push({ x, y, z, sx, sy, sz, color });
 
-  // Five deep piers and four overhead slabs leave four clear drive-through mouths.
+  // Five deep piers and one continuous ceiling leave four clear drive-through
+  // mouths. A single slab avoids coplanar overlaps that shimmer as the camera
+  // approaches the garage.
   for (let boundary = 0; boundary <= bayCount; boundary++) {
     const x = (boundary - bayCount / 2) * baySpacing;
     addRock(x, 2.45, 0.25, boundary === 0 || boundary === bayCount ? 1.5 : 0.78, 4.9, 8.9, 0x623a2b);
   }
-  bayCenters.forEach((x, index) => {
-    addRock(x, 5.45, 0.25, baySpacing + 0.22, 1.18, 9.25, index % 2 ? 0x724632 : 0x68402f);
-  });
+  addRock(0, 5.45, 0.25, garageWidth + 0.32, 1.18, 9.25, 0x68402f);
 
   // Irregular horizontal courses and battered side banks sell the excavation.
   const courseColors = [0x8a5033, 0x6f3e2c, 0x9a5c3b, 0x583128];
@@ -134,7 +134,7 @@ export function buildRockGarage({
         x + Math.sin(segment * 2.7 + course) * 0.16,
         y + Math.sin(segment * 1.9) * 0.08,
         0.15 + course * 0.24,
-        span + 0.18,
+        span - 0.12,
         0.82,
         9.5 - course * 0.32,
         courseColors[(course + segment) % courseColors.length]

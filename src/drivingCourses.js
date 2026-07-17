@@ -166,26 +166,6 @@ export function buildDrivingCourses({
       rampIndices: [8],
       recommended: 'DUSTCRAWLER',
     },
-    {
-      id: 'solis-launch',
-      name: 'SOLIS LAUNCH LINE',
-      subtitle: 'BOOSTS · LOW-G AIRTIME',
-      center: [42, -118],
-      radiusX: 53,
-      radiusZ: 23,
-      width: 2.9,
-      waves: 4,
-      waveAmount: 0.08,
-      phase: 3.4,
-      roadColor: 0x51231e,
-      centerColor: 0x8d3526,
-      edgeColor: 0xb78cff,
-      accentColor: 0xb78cff,
-      checkpointCount: 11,
-      boostIndices: [1, 4, 7, 9],
-      rampIndices: [2, 5, 8],
-      recommended: 'ZEPHYR SKIMMER',
-    },
   ];
 
   const root = new THREE.Group();
@@ -498,7 +478,7 @@ export function buildDrivingCourses({
     for (const { course, zone } of boostRecords) {
       if (zone.cooldown > 0 || arcDistance(normal, zone.normal, planetRadius) >= 3.35) continue;
       zone.cooldown = 2.8;
-      boost = Math.max(boost, course.id === 'solis-launch' ? 7.5 : 5.2);
+      boost = Math.max(boost, 5.2);
       event = `${course.name} · ELECTRIC BOOST`; 
       state.gateFlash = 1;
     }
@@ -506,7 +486,7 @@ export function buildDrivingCourses({
       for (const { course, zone } of rampRecords) {
         if (zone.cooldown > 0 || arcDistance(normal, zone.normal, planetRadius) >= 3.1) continue;
         zone.cooldown = 4.2;
-        jumpImpulse = Math.max(jumpImpulse, course.id === 'solis-launch' ? 8.8 : 6.2);
+        jumpImpulse = Math.max(jumpImpulse, 6.2);
         event = `${course.name} · LAUNCH RAMP`; 
         state.gateFlash = 1;
       }
