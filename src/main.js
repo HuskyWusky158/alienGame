@@ -1,25 +1,61 @@
 import * as THREE from 'three';
 import './style.css';
+import { buildMarsVehicleSuite } from './vehicleSuite.js';
+import { buildRockGarage } from './rockGarage.js';
+import { buildDrivingCourses } from './drivingCourses.js';
 
 /* ---------- renderer / scene / camera ---------- */
 
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouchDevice) document.body.classList.add('touch-device');
 
+const loadingScreenEl = document.getElementById('loading-screen');
+const loadingProgressEl = document.getElementById('loading-progress');
+const loadingStatusEl = document.getElementById('loading-status');
+const loadingPercentEl = document.getElementById('loading-percent');
+let loadingComplete = false;
+let renderedStartupFrames = 0;
+
+function setLoadingStage(progress, status) {
+  if (!loadingScreenEl) return;
+  const safeProgress = THREE.MathUtils.clamp(Math.round(progress), 0, 100);
+  loadingProgressEl.style.width = `${safeProgress}%`;
+  loadingStatusEl.textContent = status;
+  loadingPercentEl.textContent = `${safeProgress.toString().padStart(2, '0')}%`;
+}
+
+function finishLoadingScreen() {
+  if (loadingComplete || !loadingScreenEl) return;
+  loadingComplete = true;
+  setLoadingStage(100, 'EXPEDITION READY');
+  window.setTimeout(() => loadingScreenEl.classList.add('is-ready'), 180);
+  window.setTimeout(() => loadingScreenEl.remove(), 1100);
+}
+
+setLoadingStage(18, 'INITIALIZING MARTIAN ATMOSPHERE');
+
 const scene = new THREE.Scene();
 const clearSpaceColor = new THREE.Color(0x02030a);
 scene.background = clearSpaceColor.clone();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1600);
 
-const renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice });
+const renderer = new THREE.WebGLRenderer({
+  antialias: !isTouchDevice,
+  powerPreference: 'high-performance',
+  stencil: false,
+});
+const renderPixelRatioFloor = isTouchDevice ? 0.8 : 1;
+const renderPixelRatioCeiling = Math.min(window.devicePixelRatio, isTouchDevice ? 1.25 : 1.75);
+let currentRenderPixelRatio = renderPixelRatioCeiling;
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, isTouchDevice ? 1.5 : 2));
+renderer.setPixelRatio(currentRenderPixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('app').appendChild(renderer.domElement);
+setLoadingStage(27, 'CALIBRATING ROVER OPTICS');
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -41,6 +77,19 @@ const UP = new THREE.Vector3(0, 1, 0);
 const START_NORMAL = new THREE.Vector3(0, 1, 0);
 const playerNormal = START_NORMAL.clone();
 const playerHeading = new THREE.Vector3(0, 0, -1);
+const GARAGE_NORMAL = normalFromSurfaceCoords(-26, 10);
+const GARAGE_OUTWARD_HEADING = START_NORMAL.clone()
+  .addScaledVector(GARAGE_NORMAL, -START_NORMAL.dot(GARAGE_NORMAL))
+  .normalize();
+const GARAGE_SPAWN_NORMAL = stepWorldNormal(GARAGE_NORMAL, GARAGE_OUTWARD_HEADING, 11, PLANET_RADIUS);
+const GARAGE_SPAWN_HEADING = GARAGE_NORMAL.clone()
+  .addScaledVector(GARAGE_SPAWN_NORMAL, -GARAGE_NORMAL.dot(GARAGE_SPAWN_NORMAL))
+  .normalize();
+const MARS_COURSE_CLEAR_ZONES = [
+  { normal: normalFromSurfaceCoords(76, 48), radius: 58 },
+  { normal: normalFromSurfaceCoords(-128, -2), radius: 48 },
+  { normal: normalFromSurfaceCoords(42, -118), radius: 64 },
+];
 const MOON_COLD_TRAP_DIRECTION = UP.clone()
   .addScaledVector(MOON_PAD_NORMAL, -UP.dot(MOON_PAD_NORMAL))
   .normalize()
@@ -153,11 +202,48 @@ function sampleMoonMacroGeology(normal, target = null) {
 
 const HUBS = [
   { key: 'outpost', name: "Caitlin's Projects", x: 144, z: -144, color: 0x6fb8ff, trigger: 13 },
-  { key: 'cavern', name: 'Contact Info', x: -144, z: -144, color: 0xb266ff, trigger: 13 },
+  { key: 'cavern', name: 'Crystal Outcrop', x: -144, z: -144, color: 0xb266ff, trigger: 13, hiddenWaypoint: true },
   { key: 'ruins', name: 'Ancient Ruins', x: 144, z: 144, color: 0xe0a35a, trigger: 13 },
   { key: 'crash', name: 'Crash Site', x: -144, z: 144, color: 0xff6a4a, trigger: 13 },
-  { key: 'nightfall', name: 'Nightfall Cave', x: -52, z: -42, color: 0xd66b48, trigger: 19 },
+  { key: 'nightfall', name: 'Crystal Cavern', x: -52, z: -42, color: 0x62e6bd, trigger: 19 },
 ];
+const SURFACE_WAYPOINT_HUBS = HUBS.filter((hub) => !hub.hiddenWaypoint);
+
+const PROJECTS = [
+  {
+    title: '911 Call Forecasting Dashboard',
+    desc: 'Built during my OSU / Levrum internship. Predicts hourly 911 call volumes using analytics and machine learning.',
+    url: 'https://www.levrum.com',
+    label: 'View Company',
+  },
+  {
+    title: 'Resilient Rise Therapy',
+    desc: 'Freelance website for a licensed therapist, with service pages, telehealth info, and SEO-optimized copy. Built with Astro and Tailwind CSS.',
+    url: 'https://resilient-rise.vercel.app',
+    label: 'View Site',
+  },
+  {
+    title: 'Cooking Measurement Converter',
+    desc: 'Responsive web app for converting cooking measurements, with a clean UI supporting common kitchen conversions.',
+    url: 'https://conversionapp.vercel.app',
+    label: 'Try Live App',
+  },
+  {
+    title: 'Web Skills Showcase',
+    desc: 'A web development project demonstrating responsive design, accessibility, and modern web standards.',
+    url: 'https://web-dev-project-teal.vercel.app/index.html',
+    label: 'View Website',
+  },
+  {
+    title: 'Trail First-Aid Checklist',
+    desc: 'Work in progress: a hiking trip planner generating gear and first-aid checklists tailored to distance, terrain, season, and elevation. Java/Spring Boot backend, vanilla JS frontend.',
+    url: 'https://trail-first-aid-checklist.vercel.app',
+    label: 'Try It',
+  },
+].map((project) => ({
+  ...project,
+  preview: `https://image.thum.io/get/width/960/crop/540/noanimate/${project.url}`,
+}));
 
 const SPEAKER_STATIONS = [
   { key: 'ion', name: 'MARS CHILL-HOP', x: -12, z: -10, color: 0x72e6ff },
@@ -670,6 +756,7 @@ function baseSurfaceHeight(normal) {
 
 const FLATTEN_CENTERS = [
   { normal: START_NORMAL, r0: 6, r1: 11 },
+  { normal: GARAGE_NORMAL, r0: 15, r1: 23 },
   ...HUBS.map((hub) => ({ normal: hub.normal, r0: 8, r1: 13 })),
   ...[-12, 12].map((distance) => ({
     normal: stepWorldNormal(NIGHTFALL_CAVE.normal, NIGHTFALL_CAVE.heading, distance, PLANET_RADIUS),
@@ -1162,7 +1249,8 @@ scene.add(ambientLight);
 
 // The Moon gets its own grazing solar key instead of inheriting Mars' warm,
 // shadowless ambience. The light follows the active lunar area so one compact
-// shadow map can resolve boots, rocks, the shuttle, and habitat silhouettes.
+// shadow map can resolve the alien, vehicles, and habitat silhouettes without
+// redrawing the planet-scale regolith into the shadow map.
 const moonSolarTangent = new THREE.Vector3(1, 0, 0)
   .addScaledVector(MOON_PAD_NORMAL, -MOON_PAD_NORMAL.x)
   .normalize()
@@ -1177,13 +1265,13 @@ scene.add(moonSunTarget);
 const moonSunLight = new THREE.DirectionalLight(0xfff2da, 0);
 moonSunLight.target = moonSunTarget;
 moonSunLight.castShadow = true;
-moonSunLight.shadow.mapSize.set(isTouchDevice ? 512 : 1536, isTouchDevice ? 512 : 1536);
+moonSunLight.shadow.mapSize.set(isTouchDevice ? 512 : 1024, isTouchDevice ? 512 : 1024);
 moonSunLight.shadow.camera.near = 0.5;
 moonSunLight.shadow.camera.far = 105;
-moonSunLight.shadow.camera.left = -24;
-moonSunLight.shadow.camera.right = 24;
-moonSunLight.shadow.camera.top = 24;
-moonSunLight.shadow.camera.bottom = -24;
+moonSunLight.shadow.camera.left = -20;
+moonSunLight.shadow.camera.right = 20;
+moonSunLight.shadow.camera.top = 20;
+moonSunLight.shadow.camera.bottom = -20;
 moonSunLight.shadow.bias = -0.00035;
 moonSunLight.shadow.normalBias = 0.055;
 moonSunLight.shadow.radius = isTouchDevice ? 1 : 2;
@@ -1281,6 +1369,7 @@ function buildPlanet() {
   scene.add(atmosphere);
 }
 buildPlanet();
+setLoadingStage(44, 'SCULPTING MARTIAN TERRAIN');
 
 /* ---------- dust shell, devils & rocks ---------- */
 
@@ -1568,34 +1657,104 @@ function addCollider(x, z, radius) {
 function buildRocks() {
   const count = isTouchDevice ? 72 : 128;
   const geometry = new THREE.IcosahedronGeometry(1, 0);
+  geometry.computeBoundingSphere();
   const material = new THREE.MeshStandardMaterial({ color: 0x4d221a, roughness: 1, flatShading: true });
-  const mesh = new THREE.InstancedMesh(geometry, material, count);
-  const dummy = new THREE.Object3D();
   const align = new THREE.Quaternion();
   const yaw = new THREE.Quaternion();
+  const chunkCount = isTouchDevice ? 10 : 16;
+  const chunks = Array.from({ length: chunkCount }, (_, index) => {
+    const y = 1 - ((index + 0.5) * 2) / chunkCount;
+    const radius = Math.sqrt(Math.max(0, 1 - y * y));
+    const angle = index * Math.PI * (3 - Math.sqrt(5));
+    return {
+      direction: new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius),
+      rocks: [],
+    };
+  });
+  let seed = 0x4d415253;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const randomRockNormal = () => {
+    const y = random() * 2 - 1;
+    const angle = random() * Math.PI * 2;
+    const radius = Math.sqrt(1 - y * y);
+    return new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+  };
   let placed = 0;
   while (placed < count) {
-    const normal = randomUnitVector();
+    const normal = randomRockNormal();
     if (geodesicDistance(normal, START_NORMAL) < 12) continue;
+    if (geodesicDistance(normal, GARAGE_NORMAL) < 21) continue;
+    if (MARS_COURSE_CLEAR_ZONES.some((zone) => geodesicDistance(normal, zone.normal) < zone.radius)) continue;
     if (HUBS.some((hub) => geodesicDistance(normal, hub.normal) < 11)) continue;
     if (geodesicDistance(normal, NIGHTFALL_CAVE.normal) < 25) continue;
     if (SPEAKER_STATIONS.some((station) => geodesicDistance(normal, station.normal) < 4.2)) continue;
     if (geodesicDistance(normal, MARS_PORT.normal) < 8) continue;
-    const scale = 0.28 + Math.pow(Math.random(), 2) * 1.75;
-    dummy.position.copy(surfaceWorldPosition(normal, scale * 0.3));
+    const scale = 0.28 + Math.pow(random(), 2) * 1.75;
+    const position = surfaceWorldPosition(normal, scale * 0.3);
     align.setFromUnitVectors(UP, normal);
-    yaw.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
-    dummy.quaternion.copy(align).multiply(yaw);
-    dummy.scale.set(scale * (0.72 + Math.random() * 0.55), scale * (0.55 + Math.random() * 0.55), scale);
-    dummy.updateMatrix();
-    mesh.setMatrixAt(placed, dummy.matrix);
+    yaw.setFromAxisAngle(UP, random() * Math.PI * 2);
+    const quaternion = align.clone().multiply(yaw);
+    const rockScale = new THREE.Vector3(
+      scale * (0.72 + random() * 0.55),
+      scale * (0.55 + random() * 0.55),
+      scale
+    );
+    let chunkIndex = 0;
+    let closestDirection = -Infinity;
+    for (let index = 0; index < chunks.length; index++) {
+      const direction = normal.dot(chunks[index].direction);
+      if (direction > closestDirection) {
+        closestDirection = direction;
+        chunkIndex = index;
+      }
+    }
+    chunks[chunkIndex].rocks.push({ position, quaternion, scale: rockScale });
     if (scale > 1.18) obstacles.push({ normal: normal.clone(), radius: scale * 0.82 });
     placed++;
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  scene.add(mesh);
+
+  const group = new THREE.Group();
+  group.name = 'Mars rock field · spatially culled chunks';
+  const dummy = new THREE.Object3D();
+  const chunkCenter = new THREE.Vector3();
+  const localPosition = new THREE.Vector3();
+  const baseRadius = geometry.boundingSphere.radius;
+  chunks.forEach((chunk, chunkIndex) => {
+    if (chunk.rocks.length === 0) return;
+    chunkCenter.set(0, 0, 0);
+    chunk.rocks.forEach((rock) => chunkCenter.add(rock.position));
+    chunkCenter.multiplyScalar(1 / chunk.rocks.length);
+
+    const chunkGeometry = geometry.clone();
+    const mesh = new THREE.InstancedMesh(chunkGeometry, material, chunk.rocks.length);
+    mesh.name = `Mars rock field · spatial chunk ${chunkIndex + 1}`;
+    mesh.position.copy(chunkCenter);
+    let boundsRadius = 0;
+    chunk.rocks.forEach((rock, index) => {
+      localPosition.copy(rock.position).sub(chunkCenter);
+      dummy.position.copy(localPosition);
+      dummy.quaternion.copy(rock.quaternion);
+      dummy.scale.copy(rock.scale);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+      boundsRadius = Math.max(
+        boundsRadius,
+        localPosition.length() + baseRadius * Math.max(rock.scale.x, rock.scale.y, rock.scale.z)
+      );
+    });
+    chunkGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), boundsRadius + 0.05);
+    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.frustumCulled = true;
+    group.add(mesh);
+  });
+  scene.add(group);
+  return group;
 }
-buildRocks();
+const marsRockField = buildRocks();
 
 /* ---------- Arabia Terra sedimentary escarpment ---------- */
 
@@ -2044,6 +2203,8 @@ function updateMarsImpactBasin(dt, time, activeMarsNormal) {
 
 /* ---------- dirt pathways & spawn signs ---------- */
 
+const marsTrailMeshes = [];
+
 function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 1) {
   const distance = geodesicDistance(START_NORMAL, hub.normal);
   const steps = Math.max(24, Math.ceil(distance / 0.72));
@@ -2094,6 +2255,7 @@ function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 
     })
   );
   scene.add(mesh);
+  marsTrailMeshes.push(mesh);
   return mesh;
 }
 
@@ -2102,7 +2264,7 @@ function buildDirtPath(hub) {
   buildTrailRibbon(hub, 0.15, -0.72, 0.145, 0x3f211c, 0.78);
   buildTrailRibbon(hub, 0.15, 0.72, 0.145, 0x3f211c, 0.78);
 }
-HUBS.forEach(buildDirtPath);
+SURFACE_WAYPOINT_HUBS.forEach(buildDirtPath);
 
 function makeLabelSprite(text, colorHex) {
   const canvas = document.createElement('canvas');
@@ -2122,42 +2284,172 @@ function makeLabelSprite(text, colorHex) {
   return sprite;
 }
 
+const drivingCourses = buildDrivingCourses({
+  planetRadius: PLANET_RADIUS,
+  normalFromCoords: normalFromSurfaceCoords,
+  surfacePosition: surfaceWorldPosition,
+  makeLabelSprite,
+  isTouchDevice,
+});
+scene.add(drivingCourses.root);
+let drivingCoursePrompt = '';
+let activeDrivingCourse = null;
+
+function makeWoodSignTexture(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const fontSize = text.length > 22 ? 94 : text.length > 16 ? 108 : 126;
+  ctx.font = `900 ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(20, 7, 2, 0.95)';
+  ctx.shadowBlur = 12;
+  ctx.strokeStyle = '#241006';
+  ctx.lineWidth = 24;
+  ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#fff7df';
+  ctx.lineWidth = 5;
+  ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  ctx.fillStyle = '#fff1bc';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 function buildSignposts() {
-  const contactHub = HUBS.find((hub) => hub.key === 'cavern');
-  const nightfallHub = HUBS.find((hub) => hub.key === 'nightfall');
-  const sharedTarget = slerpNormals(nightfallHub.normal, contactHub.normal, 0.35);
-  const signposts = HUBS
-    .filter((hub) => hub.key !== 'cavern' && hub.key !== 'nightfall')
-    .map((hub) => ({ hub, target: hub.normal, label: hub.name, color: hub.color }));
-  signposts.push({
-    hub: nightfallHub,
-    target: sharedTarget,
-    label: "CAITLIN'S CONTACT INFO",
-    color: 0xc37dff,
-    wide: true,
+  const signposts = SURFACE_WAYPOINT_HUBS.map((hub) => ({
+    hub,
+    target: hub.normal,
+    label: hub.key === 'crash' ? "CAITLIN'S CONTACT INFO" : hub.name,
+  }));
+  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4a2817, roughness: 0.96, flatShading: true });
+  const boardMaterial = new THREE.MeshStandardMaterial({
+    color: 0x92582d,
+    emissive: 0x251107,
+    emissiveIntensity: 0.24,
+    roughness: 0.9,
+    flatShading: true,
+    side: THREE.DoubleSide,
   });
-  signposts.forEach(({ hub, target, label: signLabel, color, wide }) => {
+  const nailMaterial = new THREE.MeshStandardMaterial({ color: 0x4a4239, metalness: 0.7, roughness: 0.5 });
+  const landingCameraPosition = surfaceWorldPosition(START_NORMAL)
+    .addScaledVector(START_NORMAL, 18)
+    .addScaledVector(playerHeading, -16);
+  signposts.forEach(({ hub, target, label: signLabel }) => {
     const group = new THREE.Group();
-    const normal = slerpNormals(START_NORMAL, target, 7 / geodesicDistance(START_NORMAL, target));
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.8 }));
-    pole.position.y = 1.1;
+    const signDistance = 7.5;
+    const pathNormal = slerpNormals(START_NORMAL, target, signDistance / geodesicDistance(START_NORMAL, target));
+    const towardDestination = target.clone().addScaledVector(pathNormal, -target.dot(pathNormal)).normalize();
+    const pathRight = towardDestination.clone().cross(pathNormal).normalize();
+    const boardWidth = THREE.MathUtils.clamp(3.35 + signLabel.length * 0.12, 4.2, 6.4);
+    // Keep the full board beyond the packed-dirt trail while its face remains
+    // aimed at approaching drivers. Long contact signs get extra shoulder room.
+    const shoulderDistance = boardWidth * 0.5 + 1.45;
+    const normal = stepWorldNormal(pathNormal, pathRight, shoulderDistance, PLANET_RADIUS);
+    const signPosition = surfaceWorldPosition(normal);
+    const signViewDirection = landingCameraPosition.clone().sub(signPosition)
+      .addScaledVector(normal, -landingCameraPosition.clone().sub(signPosition).dot(normal))
+      .normalize();
+    const boardRight = normal.clone().cross(signViewDirection).normalize();
+    const signTowardDestination = target.clone().addScaledVector(normal, -target.dot(normal)).normalize();
+    const arrowSide = signTowardDestination.dot(boardRight) >= 0 ? 1 : -1;
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.7, 0.28), postMaterial);
+    pole.position.y = 1.32;
+    pole.rotation.z = (hub.x + hub.z) * 0.00022;
     group.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(wide ? 1.42 : 0.85, 0.5), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4, side: THREE.DoubleSide }));
-    flag.position.set(0.42, 1.85, 0);
-    group.add(flag);
-    const label = makeLabelSprite(signLabel, '#fff3e6');
-    label.position.set(0, 2.75, 0);
-    if (wide) label.scale.set(8.5, 1.05, 1);
-    group.add(label);
+    const arrowHeadLength = 0.92;
+    const halfWidth = boardWidth * 0.5;
+    const arrowShape = new THREE.Shape();
+    arrowShape.moveTo(-halfWidth * arrowSide, -0.48);
+    arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, -0.48);
+    arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, -0.68);
+    arrowShape.lineTo(halfWidth * arrowSide, 0);
+    arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, 0.68);
+    arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, 0.48);
+    arrowShape.lineTo(-halfWidth * arrowSide, 0.48);
+    arrowShape.closePath();
+    const boardGeometry = new THREE.ShapeGeometry(arrowShape, 1);
+    const board = new THREE.Mesh(boardGeometry, boardMaterial);
+    board.position.set(0, 2.16, 0);
+    group.add(board);
+    const letteringWidth = boardWidth - arrowHeadLength - 0.28;
+    const letteringGeometry = new THREE.PlaneGeometry(letteringWidth, 0.78);
+    const letteringMaterial = new THREE.MeshBasicMaterial({
+      map: makeWoodSignTexture(signLabel),
+      transparent: true,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      depthWrite: false,
+    });
+    const lettering = new THREE.Mesh(letteringGeometry, letteringMaterial);
+    const letteringCenterX = -arrowHeadLength * 0.48 * arrowSide;
+    lettering.position.set(letteringCenterX, 2.16, 0.02);
+    group.add(lettering);
+    const backLettering = new THREE.Mesh(letteringGeometry, letteringMaterial);
+    backLettering.position.set(letteringCenterX, 2.16, -0.02);
+    backLettering.rotation.y = Math.PI;
+    group.add(backLettering);
+    [-1, 1].forEach((side) => {
+      const nail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.025, 8), nailMaterial);
+      nail.rotation.x = Math.PI / 2;
+      nail.position.set(letteringCenterX + side * (letteringWidth * 0.44), 2.16, 0.025);
+      group.add(nail);
+    });
     placeSurfaceGroup(group, normal);
+    const signOrientation = new THREE.Matrix4().makeBasis(boardRight, normal, signViewDirection);
+    group.quaternion.setFromRotationMatrix(signOrientation);
+    marsSignposts.push(group);
   });
 }
+const marsSignposts = [];
 buildSignposts();
 
 /* ---------- hub builders ---------- */
 
 function stdMat(color, opts = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1, ...opts });
+}
+
+function makeProjectScreenTexture(project, index) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 432;
+  const ctx = canvas.getContext('2d');
+  const hues = [190, 155, 32, 274, 8];
+  const hue = hues[index % hues.length];
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, `hsl(${hue} 62% 16%)`);
+  gradient.addColorStop(1, `hsl(${(hue + 52) % 360} 58% 7%)`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = `hsla(${hue} 95% 72% / 0.55)`;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+  ctx.fillStyle = `hsla(${hue} 90% 65% / 0.18)`;
+  ctx.fillRect(42, 98, 684, 205);
+  for (let row = 0; row < 4; row++) {
+    ctx.fillStyle = `hsla(${hue + row * 12} 90% ${58 + row * 4}% / ${0.34 + row * 0.08})`;
+    ctx.fillRect(72, 128 + row * 42, 180 + ((index * 97 + row * 83) % 410), 20);
+  }
+  ctx.fillStyle = '#f3fbff';
+  ctx.font = '900 38px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(project.title.toUpperCase(), 42, 58, 680);
+  ctx.fillStyle = `hsl(${hue} 94% 78%)`;
+  ctx.font = '800 21px monospace';
+  ctx.fillText(new URL(project.url).hostname.toUpperCase(), 42, 346, 680);
+  ctx.fillStyle = 'rgba(223, 245, 255, 0.7)';
+  ctx.font = '700 17px monospace';
+  ctx.fillText('REMOTE SNAPSHOT LINK · SELECT SCREEN TO OPEN', 42, 390, 680);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 function buildResearchOutpost(hub) {
@@ -2296,6 +2588,113 @@ function buildResearchOutpost(hub) {
   interiorLight.position.set(5.25, 1.5, 1.3);
   saucer.add(interiorLight);
 
+  const rampLabel = makeLabelSprite('WALK UP RAMP · E ENTER PROJECT ARCHIVE', '#c8f8ff');
+  rampLabel.position.set(6.35, 2.65, 1.3);
+  rampLabel.scale.set(8.2, 1.06, 1);
+  saucer.add(rampLabel);
+
+  const interiorGallery = new THREE.Group();
+  interiorGallery.name = "Caitlin's project archive · crashed UFO interior";
+  interiorGallery.position.set(0, -18, 0);
+  interiorGallery.visible = false;
+  group.add(interiorGallery);
+
+  const cabinFloor = new THREE.Mesh(
+    new THREE.CylinderGeometry(8.2, 8.2, 0.28, 36),
+    stdMat(0x111a22, { metalness: 0.78, roughness: 0.38, emissive: 0x07141d, emissiveIntensity: 0.46 })
+  );
+  cabinFloor.position.y = 0;
+  interiorGallery.add(cabinFloor);
+  const cabinWall = new THREE.Mesh(
+    new THREE.CylinderGeometry(8.25, 8.25, 5.8, 36, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: 0x17252d,
+      emissive: 0x061821,
+      emissiveIntensity: 0.58,
+      metalness: 0.72,
+      roughness: 0.42,
+      side: THREE.BackSide,
+    })
+  );
+  cabinWall.position.y = 2.75;
+  interiorGallery.add(cabinWall);
+  const ceiling = new THREE.Mesh(
+    new THREE.CylinderGeometry(8.2, 8.2, 0.22, 36),
+    stdMat(0x0b1218, { metalness: 0.82, roughness: 0.42, emissive: 0x07131a, emissiveIntensity: 0.35 })
+  );
+  ceiling.position.y = 5.7;
+  interiorGallery.add(ceiling);
+
+  const ribMaterial = stdMat(0x31444d, { metalness: 0.86, roughness: 0.28, emissive: 0x0b2027, emissiveIntensity: 0.45 });
+  for (let ribIndex = 0; ribIndex < 12; ribIndex++) {
+    const angle = (ribIndex / 12) * Math.PI * 2;
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.16, 5.4, 0.2), ribMaterial);
+    rib.position.set(Math.cos(angle) * 7.95, 2.7, Math.sin(angle) * 7.95);
+    rib.rotation.y = -angle;
+    interiorGallery.add(rib);
+  }
+
+  const archiveTitle = makeLabelSprite("CAITLIN'S PROJECT ARCHIVE · SELECT A SCREEN", '#b8f7ff');
+  archiveTitle.position.set(0, 5.05, -5.55);
+  archiveTitle.scale.set(9.2, 1.15, 1);
+  interiorGallery.add(archiveTitle);
+
+  const projectScreens = [];
+  const screenLayout = [
+    { x: -4.7, y: 3.72, z: -4.55, yaw: 0.24 },
+    { x: 0, y: 3.88, z: -5.22, yaw: 0 },
+    { x: 4.7, y: 3.72, z: -4.55, yaw: -0.24 },
+    { x: -2.65, y: 1.48, z: -4.25, yaw: 0.12 },
+    { x: 2.65, y: 1.48, z: -4.25, yaw: -0.12 },
+  ];
+  PROJECTS.forEach((project, index) => {
+    const slot = screenLayout[index];
+    const screenRig = new THREE.Group();
+    screenRig.position.set(slot.x, slot.y, slot.z);
+    screenRig.rotation.y = slot.yaw;
+    interiorGallery.add(screenRig);
+    const frameColor = index % 2 === 0 ? 0x64e8ff : 0xb087ff;
+    const frame = new THREE.Mesh(
+      new THREE.BoxGeometry(3.48, 2.04, 0.18),
+      stdMat(0x192831, { metalness: 0.82, roughness: 0.3, emissive: frameColor, emissiveIntensity: 0.32 })
+    );
+    screenRig.add(frame);
+    const screenMaterial = new THREE.MeshBasicMaterial({
+      map: makeProjectScreenTexture(project, index),
+      toneMapped: false,
+    });
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 1.75), screenMaterial);
+    screen.position.z = 0.101;
+    screenRig.add(screen);
+    const statusLight = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 8, 6),
+      new THREE.MeshBasicMaterial({ color: frameColor, toneMapped: false })
+    );
+    statusLight.position.set(1.52, -0.88, 0.13);
+    screenRig.add(statusLight);
+    projectScreens.push({ project, material: screenMaterial, statusLight, loaded: false });
+  });
+
+  const consoleDesk = new THREE.Mesh(
+    new THREE.BoxGeometry(6.5, 0.72, 1.7),
+    stdMat(0x15232b, { metalness: 0.76, roughness: 0.38, emissive: 0x092029, emissiveIntensity: 0.5 })
+  );
+  consoleDesk.position.set(0, 0.55, -1.8);
+  consoleDesk.rotation.x = -0.08;
+  interiorGallery.add(consoleDesk);
+  const archiveLight = new THREE.PointLight(0x73eaff, 5.5, 18, 2);
+  archiveLight.position.set(0, 4.9, 1.8);
+  interiorGallery.add(archiveLight);
+  const violetFill = new THREE.PointLight(0xa77cff, 3.2, 15, 2);
+  violetFill.position.set(-5.5, 2.4, -1.2);
+  interiorGallery.add(violetFill);
+  const interiorCameraAnchor = new THREE.Object3D();
+  interiorCameraAnchor.position.set(0, 3.1, 6.7);
+  interiorGallery.add(interiorCameraAnchor);
+  const interiorLookAnchor = new THREE.Object3D();
+  interiorLookAnchor.position.set(0, 2.8, -4.25);
+  interiorGallery.add(interiorLookAnchor);
+
   const smokeCount = 34;
   const smokePositions = new Float32Array(smokeCount * 3);
   const smokeBases = new Float32Array(smokeCount * 3);
@@ -2344,7 +2743,10 @@ function buildResearchOutpost(hub) {
   group.add(archiveLabel);
 
   addCollider(hub.x, hub.z, 6.8);
-  return { group, saucer, rimLights, interiorLight, smoke, smokeBases, smokeSpeeds, sparks, breachGlow };
+  return {
+    group, saucer, rimLights, interiorLight, smoke, smokeBases, smokeSpeeds, sparks, breachGlow,
+    interiorGallery, interiorCameraAnchor, interiorLookAnchor, projectScreens, archiveLight,
+  };
 }
 
 function buildCrystalCavern(hub) {
@@ -2431,35 +2833,255 @@ function buildAncientRuins(hub) {
 function buildCrashSite(hub) {
   const baseY = getTerrainHeight(hub.x, hub.z);
   const group = new THREE.Group();
+  group.name = "Caitlin's contact relay · crashed orbital satellite";
   placeSurfaceGroup(group, hub.normal);
 
-  const hull = new THREE.Mesh(
-    new THREE.CapsuleGeometry(1.6, 7, 4, 12),
-    stdMat(0x555b60, { metalness: 0.6, roughness: 0.5 })
+  const charMaterial = stdMat(0x18191a, { metalness: 0.42, roughness: 0.88, flatShading: true });
+  const frameMaterial = stdMat(0x687178, { metalness: 0.88, roughness: 0.28 });
+  const aluminumMaterial = stdMat(0xaeb6b8, { metalness: 0.82, roughness: 0.34 });
+  const goldFoilMaterial = stdMat(0xb77a22, {
+    color: 0xb77a22,
+    emissive: 0x3c1b03,
+    emissiveIntensity: 0.2,
+    metalness: 0.72,
+    roughness: 0.46,
+    flatShading: true,
+  });
+  const solarCellMaterial = stdMat(0x123a61, {
+    emissive: 0x071a2c,
+    emissiveIntensity: 0.34,
+    metalness: 0.68,
+    roughness: 0.28,
+  });
+  const solarGridMaterial = new THREE.MeshBasicMaterial({ color: 0x82b9d4, toneMapped: false });
+
+  const impactScorch = new THREE.Mesh(
+    new THREE.CircleGeometry(9.2, 64),
+    new THREE.MeshBasicMaterial({ color: 0x210b07, transparent: true, opacity: 0.72, depthWrite: false })
   );
-  hull.rotation.z = Math.PI / 2.3;
-  hull.rotation.y = 0.4;
-  hull.position.set(0, 1.2, 0);
-  group.add(hull);
-  addCollider(hub.x, hub.z, 5);
-
-  const scorch = new THREE.Mesh(new THREE.SphereGeometry(1.3, 12, 8), stdMat(0x2a2320, { roughness: 1 }));
-  scorch.position.set(-2.5, 1.6, 1.5);
-  scorch.scale.set(1, 0.6, 1);
-  group.add(scorch);
-
-  for (let i = 0; i < 6; i++) {
-    const dx = (Math.random() - 0.5) * 12;
-    const dz = (Math.random() - 0.5) * 12;
-    const debris = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5 + Math.random() * 0.6, 0), stdMat(0x4a4d50, { metalness: 0.5, roughness: 0.6, flatShading: true }));
-    debris.position.set(dx, getTerrainHeight(hub.x + dx, hub.z + dz) - baseY + 0.3, dz);
-    debris.rotation.set(Math.random(), Math.random(), Math.random());
-    group.add(debris);
-    if (i < 2) addCollider(hub.x + dx, hub.z + dz, 0.7);
+  impactScorch.rotation.x = -Math.PI / 2;
+  impactScorch.scale.set(1.42, 0.58, 1);
+  impactScorch.position.set(0.8, 0.025, 1.1);
+  group.add(impactScorch);
+  for (let trenchIndex = 0; trenchIndex < 7; trenchIndex++) {
+    const trench = new THREE.Mesh(
+      new THREE.CircleGeometry(2.6 + trenchIndex * 0.16, 32),
+      new THREE.MeshBasicMaterial({
+        color: trenchIndex % 2 ? 0x35120b : 0x250b07,
+        transparent: true,
+        opacity: 0.52 - trenchIndex * 0.035,
+        depthWrite: false,
+      })
+    );
+    trench.rotation.x = -Math.PI / 2;
+    trench.rotation.z = -0.34;
+    trench.scale.set(1.32, 0.34, 1);
+    trench.position.set(3.8 + trenchIndex * 1.55, 0.035 + trenchIndex * 0.001, 2.1 + trenchIndex * 0.88);
+    group.add(trench);
   }
 
-  const light = new THREE.PointLight(0xff5533, 2.5, 26);
-  light.position.set(-2, 2.5, 1);
+  const wreck = new THREE.Group();
+  wreck.name = 'MARS ORBITAL RELAY 7 · impact wreckage';
+  wreck.position.set(-0.6, 0.58, 0.15);
+  wreck.rotation.set(-0.1, -0.48, 0.17);
+  group.add(wreck);
+
+  const equipmentBus = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.5, 4.4), goldFoilMaterial);
+  equipmentBus.position.y = 1.7;
+  wreck.add(equipmentBus);
+  const busCore = new THREE.Mesh(new THREE.BoxGeometry(3.12, 2.12, 4.68), charMaterial);
+  busCore.position.set(0.18, 1.65, 0.18);
+  wreck.add(busCore);
+  [-1, 1].forEach((side) => {
+    const equipmentBay = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.72, 2.9), aluminumMaterial);
+    equipmentBay.position.set(side * 1.92, 1.72, -0.2);
+    wreck.add(equipmentBay);
+    for (let portIndex = 0; portIndex < 4; portIndex++) {
+      const port = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.17, 0.18, 10), charMaterial);
+      port.rotation.z = Math.PI / 2;
+      port.position.set(side * 2.08, 1.35 + (portIndex % 2) * 0.68, -0.9 + Math.floor(portIndex / 2) * 1.5);
+      wreck.add(port);
+    }
+  });
+
+  const frameBars = [
+    [0, 3.03, -2.27, 3.95, 0.11, 0.11],
+    [0, 3.03, 2.27, 3.95, 0.11, 0.11],
+    [-1.86, 3.03, 0, 0.11, 0.11, 4.65],
+    [1.86, 3.03, 0, 0.11, 0.11, 4.65],
+  ];
+  frameBars.forEach(([x, y, z, width, height, depth]) => {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), frameMaterial);
+    bar.position.set(x, y, z);
+    wreck.add(bar);
+  });
+
+  const solarPanels = [];
+  const solarPanelCount = 5;
+  const solarPanelFrameGeometry = new THREE.BoxGeometry(2.55, 0.13, 2.1);
+  const solarPanelCellGeometry = new THREE.BoxGeometry(2.39, 0.055, 1.94);
+  const solarPanelVerticalGridGeometry = new THREE.BoxGeometry(0.025, 0.012, 1.94);
+  const solarPanelHorizontalGridGeometry = new THREE.BoxGeometry(2.39, 0.012, 0.025);
+  const solarArrayBounds = new THREE.Sphere(new THREE.Vector3(0, 1.6, 0), 12);
+  [solarPanelFrameGeometry, solarPanelCellGeometry, solarPanelVerticalGridGeometry, solarPanelHorizontalGridGeometry]
+    .forEach((geometry) => { geometry.boundingSphere = solarArrayBounds.clone(); });
+  const solarPanelFrames = new THREE.InstancedMesh(solarPanelFrameGeometry, frameMaterial, solarPanelCount);
+  const solarPanelCells = new THREE.InstancedMesh(solarPanelCellGeometry, solarCellMaterial, solarPanelCount);
+  const solarPanelVerticalGrid = new THREE.InstancedMesh(solarPanelVerticalGridGeometry, solarGridMaterial, solarPanelCount * 5);
+  const solarPanelHorizontalGrid = new THREE.InstancedMesh(solarPanelHorizontalGridGeometry, solarGridMaterial, solarPanelCount * 3);
+  solarPanelFrames.name = 'Crashed satellite · batched solar panel frames';
+  solarPanelCells.name = 'Crashed satellite · batched photovoltaic cells';
+  solarPanelVerticalGrid.name = 'Crashed satellite · batched vertical cell grid';
+  solarPanelHorizontalGrid.name = 'Crashed satellite · batched horizontal cell grid';
+  const solarPanelMatrix = new THREE.Matrix4();
+  const solarInstanceMatrix = new THREE.Matrix4();
+  const solarComponentTransform = new THREE.Object3D();
+  let solarPanelIndex = 0;
+  let solarVerticalGridIndex = 0;
+  let solarHorizontalGridIndex = 0;
+  function buildSolarWing(side) {
+    const wing = new THREE.Group();
+    wing.position.set(side * 2.15, 1.62, 0.2);
+    wing.rotation.z = side < 0 ? -0.08 : 0.16;
+    wing.rotation.y = side < 0 ? -0.03 : 0.12;
+    wing.updateMatrix();
+    wreck.add(wing);
+    const boom = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.18, 0.18), frameMaterial);
+    boom.position.x = side * 1.05;
+    wing.add(boom);
+    for (let segment = 0; segment < 3; segment++) {
+      if (side > 0 && segment === 2) continue;
+      const panelRig = new THREE.Group();
+      panelRig.position.set(side * (2.55 + segment * 2.68), side > 0 && segment === 1 ? -0.36 : 0, segment * 0.12);
+      panelRig.rotation.z = side > 0 && segment === 1 ? -0.24 : Math.sin(segment * 1.9) * 0.025;
+      panelRig.rotation.y = side > 0 && segment === 1 ? 0.16 : 0;
+      panelRig.updateMatrix();
+      wing.add(panelRig);
+      solarPanelMatrix.multiplyMatrices(wing.matrix, panelRig.matrix);
+      solarPanelFrames.setMatrixAt(solarPanelIndex, solarPanelMatrix);
+
+      solarComponentTransform.position.set(0, 0.095, 0);
+      solarComponentTransform.updateMatrix();
+      solarInstanceMatrix.multiplyMatrices(solarPanelMatrix, solarComponentTransform.matrix);
+      solarPanelCells.setMatrixAt(solarPanelIndex, solarInstanceMatrix);
+
+      for (let gridIndex = -2; gridIndex <= 2; gridIndex++) {
+        solarComponentTransform.position.set(gridIndex * 0.39, 0.13, 0);
+        solarComponentTransform.updateMatrix();
+        solarInstanceMatrix.multiplyMatrices(solarPanelMatrix, solarComponentTransform.matrix);
+        solarPanelVerticalGrid.setMatrixAt(solarVerticalGridIndex++, solarInstanceMatrix);
+      }
+      [-0.48, 0, 0.48].forEach((z) => {
+        solarComponentTransform.position.set(0, 0.132, z);
+        solarComponentTransform.updateMatrix();
+        solarInstanceMatrix.multiplyMatrices(solarPanelMatrix, solarComponentTransform.matrix);
+        solarPanelHorizontalGrid.setMatrixAt(solarHorizontalGridIndex++, solarInstanceMatrix);
+      });
+      panelRig.userData.solarInstanceIndex = solarPanelIndex;
+      solarPanelIndex += 1;
+      solarPanels.push(panelRig);
+    }
+  }
+  buildSolarWing(-1);
+  buildSolarWing(1);
+  [solarPanelFrames, solarPanelCells, solarPanelVerticalGrid, solarPanelHorizontalGrid].forEach((batch) => {
+    batch.instanceMatrix.needsUpdate = true;
+    batch.frustumCulled = true;
+    wreck.add(batch);
+  });
+
+  const dishRig = new THREE.Group();
+  dishRig.position.set(-0.35, 3.45, -2.2);
+  dishRig.rotation.set(0.32, -0.2, -0.22);
+  wreck.add(dishRig);
+  const dish = new THREE.Mesh(
+    new THREE.ConeGeometry(1.42, 0.56, 32, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0xc9d0d2, metalness: 0.78, roughness: 0.32, side: THREE.DoubleSide })
+  );
+  dish.rotation.x = Math.PI / 2;
+  dishRig.add(dish);
+  const feedBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.07, 1.55, 8), frameMaterial);
+  feedBoom.rotation.x = Math.PI / 2;
+  feedBoom.position.z = -0.62;
+  dishRig.add(feedBoom);
+  const receiver = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.34, 12), charMaterial);
+  receiver.rotation.x = Math.PI / 2;
+  receiver.position.z = -1.42;
+  dishRig.add(receiver);
+
+  const exposedBay = new THREE.Mesh(new THREE.BoxGeometry(2.85, 1.45, 0.16), charMaterial);
+  exposedBay.position.set(0.2, 1.68, 2.48);
+  exposedBay.rotation.x = -0.08;
+  wreck.add(exposedBay);
+  const wireColors = [0xff5a3c, 0xffd25c, 0x5ecbff, 0xd88cff];
+  wireColors.forEach((color, wireIndex) => {
+    const wireCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.8 + wireIndex * 0.52, 2.18, 2.58),
+      new THREE.Vector3(-1 + wireIndex * 0.58, 1.55 - wireIndex * 0.08, 3.05),
+      new THREE.Vector3(-0.55 + wireIndex * 0.42, 0.82 + wireIndex * 0.11, 3.35),
+    ]);
+    const wire = new THREE.Mesh(
+      new THREE.TubeGeometry(wireCurve, 9, 0.035, 6, false),
+      new THREE.MeshBasicMaterial({ color, toneMapped: false })
+    );
+    wreck.add(wire);
+  });
+
+  const telemetryMaterial = new THREE.MeshStandardMaterial({
+    color: 0x071b13,
+    emissive: 0x39ff9a,
+    emissiveIntensity: 1.4,
+    roughness: 0.22,
+    toneMapped: false,
+  });
+  const telemetry = new THREE.Mesh(new THREE.PlaneGeometry(1.38, 0.62), telemetryMaterial);
+  telemetry.position.set(-0.65, 1.78, 2.59);
+  wreck.add(telemetry);
+  const beaconMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff3b28,
+    emissive: 0xff2f20,
+    emissiveIntensity: 2.6,
+    roughness: 0.2,
+    toneMapped: false,
+  });
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8), beaconMaterial);
+  beacon.position.set(1.45, 3.24, 1.72);
+  wreck.add(beacon);
+
+  const detachedPanel = new THREE.Group();
+  detachedPanel.position.set(7.4, 0.42, 4.2);
+  detachedPanel.rotation.set(-0.18, 0.7, -0.12);
+  group.add(detachedPanel);
+  const detachedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.13, 2.08), frameMaterial);
+  detachedPanel.add(detachedFrame);
+  const detachedCells = new THREE.Mesh(new THREE.BoxGeometry(2.44, 0.055, 1.92), solarCellMaterial);
+  detachedCells.position.y = 0.095;
+  detachedPanel.add(detachedCells);
+
+  for (let debrisIndex = 0; debrisIndex < 14; debrisIndex++) {
+    const angle = debrisIndex * 2.17 + 0.4;
+    const distance = 6.2 + (debrisIndex % 6) * 1.28;
+    const dx = Math.cos(angle) * distance + 1.2;
+    const dz = Math.sin(angle) * distance + 1.1;
+    const shardMaterial = debrisIndex % 3 === 0 ? goldFoilMaterial : debrisIndex % 3 === 1 ? frameMaterial : charMaterial;
+    const geometry = debrisIndex % 4 === 0
+      ? new THREE.BoxGeometry(1.15, 0.1, 0.62)
+      : new THREE.ConeGeometry(0.28 + (debrisIndex % 3) * 0.11, 0.9 + (debrisIndex % 2) * 0.42, 3);
+    const debris = new THREE.Mesh(geometry, shardMaterial);
+    debris.position.set(dx, getTerrainHeight(hub.x + dx, hub.z + dz) - baseY + 0.24, dz);
+    debris.rotation.set(angle * 0.31, angle, angle * 0.47);
+    group.add(debris);
+    if (debrisIndex < 4) addCollider(hub.x + dx, hub.z + dz, 0.55);
+  }
+
+  const label = makeLabelSprite("CRASHED ORBITAL SATELLITE · CAITLIN'S CONTACT RELAY", '#ffe0b8');
+  label.position.set(0, 7.4, -0.3);
+  label.scale.set(9.5, 1.15, 1);
+  group.add(label);
+  addCollider(hub.x, hub.z, 6.5);
+
+  const light = new THREE.PointLight(0xff4c30, 2.5, 26, 2);
+  light.position.set(0.8, 3.1, 2.3);
   group.add(light);
 
   const smokeCount = 40;
@@ -2467,9 +3089,9 @@ function buildCrashSite(hub) {
   const bases = new Float32Array(smokeCount * 3);
   const speeds = new Float32Array(smokeCount);
   for (let i = 0; i < smokeCount; i++) {
-    const x = -2.5 + (Math.random() - 0.5) * 2.5;
-    const z = 1.5 + (Math.random() - 0.5) * 2.5;
-    const y = 2 + Math.random() * 4;
+    const x = 0.8 + (Math.random() - 0.5) * 2.2;
+    const z = 2.45 + (Math.random() - 0.5) * 1.8;
+    const y = 2.2 + Math.random() * 4.2;
     positions[i * 3] = bases[i * 3] = x;
     positions[i * 3 + 1] = bases[i * 3 + 1] = y;
     positions[i * 3 + 2] = bases[i * 3 + 2] = z;
@@ -2477,11 +3099,14 @@ function buildCrashSite(hub) {
   }
   const smokeGeo = new THREE.BufferGeometry();
   smokeGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const smokeMat = new THREE.PointsMaterial({ color: 0x998877, size: 0.9, transparent: true, opacity: 0.35, depthWrite: false });
+  const smokeMat = new THREE.PointsMaterial({ map: dustTexture, color: 0x675b54, size: 1.05, transparent: true, opacity: 0.32, depthWrite: false });
   const smoke = new THREE.Points(smokeGeo, smokeMat);
   group.add(smoke);
 
-  return { group, light, smoke, smokeBases: bases, smokeSpeeds: speeds };
+  return {
+    group, wreck, light, smoke, smokeBases: bases, smokeSpeeds: speeds,
+    beaconMaterial, telemetryMaterial, solarCellMaterial, solarPanels, detachedPanel,
+  };
 }
 
 function createCaveRibbonGeometry(curve, width, segments, lift = 0) {
@@ -2514,11 +3139,13 @@ function createCaveRibbonGeometry(curve, width, segments, lift = 0) {
 
 function buildSubterraneanBear() {
   const root = new THREE.Group();
-  root.name = 'Morrow · autonomous cave bear';
-  const fur = new THREE.MeshStandardMaterial({ color: 0x30201b, roughness: 0.98, flatShading: true });
-  const darkFur = new THREE.MeshStandardMaterial({ color: 0x140e0c, roughness: 1, flatShading: true });
-  const muzzleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d4a37, roughness: 0.94, flatShading: true });
-  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffd58a, toneMapped: false });
+  root.name = 'Morrow · autonomous alien bear';
+  const fur = new THREE.MeshStandardMaterial({ color: 0x17443f, emissive: 0x061c19, emissiveIntensity: 0.32, roughness: 0.92, flatShading: true });
+  const darkFur = new THREE.MeshStandardMaterial({ color: 0x071a20, emissive: 0x031014, emissiveIntensity: 0.2, roughness: 1, flatShading: true });
+  const muzzleMaterial = new THREE.MeshStandardMaterial({ color: 0x6f7c75, emissive: 0x182d2a, emissiveIntensity: 0.18, roughness: 0.86, flatShading: true });
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x7affd9, toneMapped: false });
+  const alienGlowMaterial = new THREE.MeshStandardMaterial({ color: 0x81ffe1, emissive: 0x25d7b0, emissiveIntensity: 2.8, roughness: 0.24, toneMapped: false });
+  const spineMaterial = new THREE.MeshStandardMaterial({ color: 0x9c7bff, emissive: 0x5938c7, emissiveIntensity: 1.8, roughness: 0.34, flatShading: true, toneMapped: false });
   const body = new THREE.Mesh(new THREE.IcosahedronGeometry(2.35, 1), fur);
   body.scale.set(1.65, 1.05, 1.08);
   body.position.y = 3.15;
@@ -2548,6 +3175,43 @@ function buildSubterraneanBear() {
     eye.position.set(side * 0.48, 0.18, -1.12);
     head.add(eye);
   });
+  const thirdEye = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 7), alienGlowMaterial);
+  thirdEye.scale.set(1, 1.25, 0.52);
+  thirdEye.position.set(0, 0.65, -1.18);
+  head.add(thirdEye);
+
+  const antennaTips = [];
+  [-1, 1].forEach((side) => {
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.075, 1.45, 7), darkFur);
+    antenna.position.set(side * 0.52, 1.45, -0.05);
+    antenna.rotation.z = side * -0.34;
+    antenna.rotation.x = -0.18;
+    head.add(antenna);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.17, 9, 7), alienGlowMaterial);
+    tip.position.set(side * 0.76, 2.14, -0.2);
+    head.add(tip);
+    antennaTips.push(tip);
+  });
+
+  const dorsalSpines = [];
+  for (let index = 0; index < 6; index++) {
+    const spine = new THREE.Mesh(new THREE.ConeGeometry(0.34 + index * 0.035, 1.05 + Math.sin(index * 0.9) * 0.28, 6), spineMaterial);
+    spine.position.set(0, 5.35 + Math.sin(index * 1.2) * 0.18, -1.55 + index * 0.68);
+    spine.rotation.x = (index - 2.5) * 0.07;
+    root.add(spine);
+    dorsalSpines.push(spine);
+  }
+
+  const glowSpots = [];
+  [-1, 1].forEach((side) => {
+    for (let index = 0; index < 4; index++) {
+      const spot = new THREE.Mesh(new THREE.SphereGeometry(0.19 + index * 0.025, 8, 6), alienGlowMaterial);
+      spot.scale.set(0.42, 1, 1);
+      spot.position.set(side * (3.72 - index * 0.16), 3.2 + Math.sin(index * 1.7) * 0.72, -0.85 + index * 0.62);
+      root.add(spot);
+      glowSpots.push(spot);
+    }
+  });
   const legs = [];
   [[-1.35, -1.5], [1.35, -1.5], [-1.35, 1.55], [1.35, 1.55]].forEach(([x, z]) => {
     const leg = new THREE.Group();
@@ -2563,7 +3227,7 @@ function buildSubterraneanBear() {
     legs.push(leg);
   });
   root.scale.setScalar(1.35);
-  return { root, body, head, legs };
+  return { root, body, head, legs, thirdEye, antennaTips, dorsalSpines, glowSpots, alienGlowMaterial, spineMaterial };
 }
 
 function buildNightfallCave(hub) {
@@ -2848,7 +3512,7 @@ function buildNightfallCave(hub) {
   bear.root.position.set(-20, CAVE_CHAMBER_CENTER.y + 0.25, -210);
   bear.root.rotation.y = -0.5;
   chamber.add(bear.root);
-  const bearLabel = makeLabelSprite('MORROW · AUTONOMOUS CAVE BEAR', '#ffd39b');
+  const bearLabel = makeLabelSprite('MORROW · AUTONOMOUS ALIEN BEAR', '#91ffe2');
   bearLabel.position.set(0, 8.6, 0);
   bearLabel.scale.set(6.4, 0.9, 1);
   bear.root.add(bearLabel);
@@ -2911,6 +3575,9 @@ function placeCaveRover(dt) {
 }
 
 function enterNightfallDescent() {
+  drivingCourses.reset();
+  drivingCoursePrompt = '';
+  activeDrivingCourse = null;
   caveTravelZone = 'tunnel';
   caveRouteDistance = 0.5;
   caveRouteFacing = 1;
@@ -2948,7 +3615,10 @@ function updateCaveNavigation(dt, steeringInput) {
   if (caveTravelZone === 'chamber') {
     const reverseSteer = driveSpeed < -0.1 ? -1 : 1;
     const steerStrength = THREE.MathUtils.clamp(Math.abs(driveSpeed) / 3, 0.18, 1);
-    caveChamberHeading.applyAxisAngle(UP, steeringInput * reverseSteer * turnSpeed * steerStrength * dt).normalize();
+    caveChamberHeading.applyAxisAngle(
+      UP,
+      steeringInput * reverseSteer * (activeProfile?.turnRate || 1.65) * steerStrength * dt
+    ).normalize();
     const candidate = caveLocalPosition.clone().addScaledVector(caveChamberHeading, driveSpeed * dt);
     const normalizedX = (candidate.x - CAVE_CHAMBER_CENTER.x) / (CAVE_CHAMBER_RADIUS_X - 4);
     const normalizedZ = (candidate.z - CAVE_CHAMBER_CENTER.z) / (CAVE_CHAMBER_RADIUS_Z - 4);
@@ -2973,6 +3643,11 @@ function updateCaveNavigation(dt, steeringInput) {
 
 function updateNightfallWorld(dt, time) {
   const runtime = hubRuntime.nightfall;
+  if (caveWaterGain && audioStarted && audioEnabled && audioContext.state === 'running') {
+    const caveWaterLevel = caveTravelZone === 'chamber' ? 0.0085 : caveTravelZone === 'tunnel' ? 0.0012 : 0.0001;
+    caveWaterGain.gain.setTargetAtTime(caveWaterLevel, audioContext.currentTime, caveTravelZone === 'surface' ? 0.5 : 0.8);
+  }
+  if (!runtime.group.visible) return;
   runtime.riverMaterial.uniforms.uTime.value = time;
   runtime.waterfallMaterial.uniforms.uTime.value = time;
   runtime.crystalMaterials.forEach((material, index) => {
@@ -3002,6 +3677,15 @@ function updateNightfallWorld(dt, time) {
   runtime.hiveLight.intensity = 3.8 + Math.sin(time * 1.7) * 0.7;
 
   const bearRuntime = runtime.bear;
+  bearRuntime.alienGlowMaterial.emissiveIntensity = 2.45 + Math.sin(time * 2.2) * 0.65;
+  bearRuntime.spineMaterial.emissiveIntensity = 1.55 + Math.sin(time * 1.35 + 0.7) * 0.42;
+  bearRuntime.antennaTips.forEach((tip, index) => {
+    const pulse = 0.86 + Math.sin(time * 3.4 + index * 1.8) * 0.16;
+    tip.scale.setScalar(pulse);
+  });
+  bearRuntime.dorsalSpines.forEach((spine, index) => {
+    spine.rotation.z = Math.sin(time * 0.85 + index * 0.72) * 0.035;
+  });
   const waypoint = runtime.bearWaypoints[runtime.bearWaypoint];
   const toWaypoint = waypoint.position.clone().sub(bearRuntime.root.position);
   const distance = toWaypoint.length();
@@ -3026,10 +3710,6 @@ function updateNightfallWorld(dt, time) {
       const lookDirection = caveLocalPosition.clone().sub(bearRuntime.root.position);
       bearRuntime.head.rotation.y = THREE.MathUtils.damp(bearRuntime.head.rotation.y, Math.atan2(-lookDirection.x, -lookDirection.z) - bearRuntime.root.rotation.y, 3.5, dt);
     }
-  }
-  if (caveWaterGain && audioStarted && audioEnabled && audioContext.state === 'running') {
-    const caveWaterLevel = caveTravelZone === 'chamber' ? 0.0085 : caveTravelZone === 'tunnel' ? 0.0012 : 0.0001;
-    caveWaterGain.gain.setTargetAtTime(caveWaterLevel, audioContext.currentTime, caveTravelZone === 'surface' ? 0.5 : 0.8);
   }
 }
 
@@ -3065,6 +3745,7 @@ HUBS.forEach((hub) => {
   if (hub.key === 'crash') hubRuntime[hub.key] = buildCrashSite(hub);
   if (hub.key === 'nightfall') hubRuntime[hub.key] = buildNightfallCave(hub);
 });
+setLoadingStage(63, 'LIGHTING THE UNDERMARS');
 
 /* ---------- proximity speaker stations ---------- */
 
@@ -4763,6 +5444,7 @@ function buildMoonCommandPath() {
   }
   markers.instanceMatrix.needsUpdate = true;
   scene.add(markers);
+  return markers;
 }
 
 function buildMoonCommandCenter() {
@@ -4932,7 +5614,7 @@ function buildMoonCommandCenter() {
   };
 }
 
-buildMoonCommandPath();
+const moonCommandPath = buildMoonCommandPath();
 const moonCommandRuntime = buildMoonCommandCenter();
 const moonCommandDeltaNormal = new THREE.Vector3();
 
@@ -5547,12 +6229,157 @@ const {
   driver: { legs, arms },
 } = buildMarsRover(alienDriver);
 
+/* ---------- Ares rock garage + efficient vehicle suite ---------- */
+
+const rockGarage = buildRockGarage({
+  THREE,
+  normal: GARAGE_NORMAL,
+  heading: GARAGE_OUTWARD_HEADING,
+  position: surfaceWorldPosition(GARAGE_NORMAL, 0.08),
+  quaternion: surfaceVehicleQuaternion(GARAGE_NORMAL, GARAGE_OUTWARD_HEADING),
+  makeStandardMaterial: stdMat,
+  isTouchDevice,
+  name: 'ARES MOTOR CAVERN',
+  bayLabels: ['G-ROVER', 'ROCKHOPPER', 'DUSTCRAWLER', 'ZEPHYR SKIMMER'],
+});
+scene.add(rockGarage.root);
+rockGarage.updateWorldAnchors();
+rockGarage.root.traverse((child) => {
+  if (!child.isMesh && !child.isInstancedMesh) return;
+  child.castShadow = false;
+  child.receiveShadow = true;
+});
+
+const vehicleSuite = buildMarsVehicleSuite({
+  rockhopper: { name: 'Rockhopper' },
+  dustcrawler: { name: 'Dustcrawler', treadSegments: isTouchDevice ? 22 : 28 },
+  zephyrSkimmer: { name: 'Zephyr Skimmer' },
+});
+
+const VEHICLE_PROFILES = {
+  'g-rover': {
+    label: 'G-ROVER', locomotion: 'wheel-hover', maxForwardSpeed: 16, maxReverseSpeed: 8,
+    acceleration: 5.8, braking: 11, coastDrag: 3.3, turnRate: 1.65,
+    stationarySteering: 0.2, fullSteerSpeed: 3.2, collisionRadius: 1.45,
+    collisionBounce: 0.08, halfWheelbase: 1.45, halfTrack: 1.25, wheelRadius: 0.79,
+    caveAllowed: true, caveMaxSpeed: 8.5, boardRadius: 4.4, exitSpeed: 1.2,
+    terrainHz: isTouchDevice ? 24 : 30, dustScale: 1, cameraHeight: 20, cameraTrail: -18,
+    driverPosition: [0, 0.42, 0.28], driverScale: 0.9,
+    lift: { fuel: 5.5, initialRise: 0.8, targetHeight: 14, acceleration: 25.5, maxRise: 11.5, spoolUp: 5.8, spoolDown: 13, dropSpeed: -2.8 },
+  },
+  rockhopper: {
+    label: 'ROCKHOPPER', locomotion: 'wheel-hop', maxForwardSpeed: 22, maxReverseSpeed: 10,
+    acceleration: 8.4, braking: 14, coastDrag: 4.6, turnRate: 2.25,
+    stationarySteering: 0.12, fullSteerSpeed: 4, collisionRadius: 1.25,
+    collisionBounce: 0.16, halfWheelbase: 1.22, halfTrack: 1.02, wheelRadius: 0.72,
+    caveAllowed: true, caveMaxSpeed: 8.5, boardRadius: 4.2, exitSpeed: 1.25,
+    terrainHz: isTouchDevice ? 30 : 45, dustScale: 1.25, cameraHeight: 16, cameraTrail: -16,
+    driverPosition: [0, 0, 0], driverScale: 0.72,
+    lift: { fuel: 3, initialRise: 2.2, targetHeight: 9, acceleration: 31, maxRise: 14, spoolUp: 9, spoolDown: 17, dropSpeed: -3.4 },
+  },
+  dustcrawler: {
+    label: 'DUSTCRAWLER', locomotion: 'tracked-heavy', maxForwardSpeed: 10, maxReverseSpeed: 5.5,
+    acceleration: 2.7, braking: 7.5, coastDrag: 2.2, turnRate: 1.05,
+    stationarySteering: 0.75, fullSteerSpeed: 2.2, collisionRadius: 2.2,
+    collisionBounce: 0.02, halfWheelbase: 2.2, halfTrack: 1.7, wheelRadius: 0.58,
+    caveAllowed: false, caveMaxSpeed: 0, boardRadius: 5, exitSpeed: 0.8,
+    terrainHz: isTouchDevice ? 20 : 24, dustScale: 1.8, cameraHeight: 24, cameraTrail: -23,
+    driverPosition: [0, 0.08, -1.35], driverScale: 0.7,
+    lift: { fuel: 1.6, initialRise: 0.35, targetHeight: 2.2, acceleration: 14, maxRise: 3.8, spoolUp: 4, spoolDown: 10, dropSpeed: -3.8 },
+  },
+  'zephyr-skimmer': {
+    label: 'ZEPHYR SKIMMER', locomotion: 'hover-drift', maxForwardSpeed: 28, maxReverseSpeed: 12,
+    acceleration: 10.5, braking: 12, coastDrag: 2, turnRate: 1.85,
+    stationarySteering: 0.25, fullSteerSpeed: 7, collisionRadius: 1.65,
+    collisionBounce: 0.05, halfWheelbase: 1.55, halfTrack: 1.4, wheelRadius: 1,
+    caveAllowed: false, caveMaxSpeed: 0, boardRadius: 4.6, exitSpeed: 1.2,
+    terrainHz: isTouchDevice ? 20 : 24, dustScale: 0.5, cameraHeight: 18, cameraTrail: -22,
+    driverPosition: [0, -0.35, -0.38], driverScale: 0.68,
+    lift: { fuel: 4.2, initialRise: 0.95, targetHeight: 7.5, acceleration: 29, maxRise: 10.5, spoolUp: 8, spoolDown: 15, dropSpeed: -3.1 },
+  },
+};
+
+let gRoverWheelDistance = 0;
+const gRoverRuntime = {
+  id: 'g-rover',
+  label: 'G-ROVER',
+  root: roverChassis,
+  chassis: roverChassis,
+  seat: roverChassis,
+  wheels: roverWheels,
+  steeringNodes: frontWheelMounts,
+  thrusterVisual: roverThrusters,
+  profile: VEHICLE_PROFILES['g-rover'],
+  updateMotion({ distance = gRoverWheelDistance, steering = 0, thrust = 0, time = 0 } = {}) {
+    const deltaDistance = distance - gRoverWheelDistance;
+    gRoverWheelDistance = distance;
+    roverWheels.forEach((wheel) => { wheel.rotation.x -= deltaDistance / 0.79; });
+    frontWheelMounts.forEach((mount) => {
+      mount.rotation.y = THREE.MathUtils.damp(mount.rotation.y, steering * 0.42, 10, 1 / 60);
+    });
+    roverThrusters.visible = thrust > 0.015;
+    if (roverThrusters.visible) roverThrusters.scale.y = (0.34 + thrust * 0.9) * (0.94 + Math.sin(time * 57) * 0.06);
+  },
+};
+
+function createVehicleRuntime(id, label, vehicle, profile, chassis) {
+  return {
+    id,
+    label,
+    root: vehicle.root,
+    chassis,
+    seat: vehicle.seat,
+    wheels: vehicle.wheels || [],
+    steeringNodes: vehicle.frontWheelMounts || [],
+    thrusterVisual: vehicle.thrusterFlames || null,
+    updateMotion: vehicle.updateMotion,
+    profile,
+    parkedNormal: new THREE.Vector3(),
+    parkedHeading: new THREE.Vector3(),
+    parked: true,
+  };
+}
+
+Object.assign(gRoverRuntime, {
+  parkedNormal: new THREE.Vector3(),
+  parkedHeading: new THREE.Vector3(),
+  parked: true,
+});
+const vehicleRuntimes = [
+  gRoverRuntime,
+  createVehicleRuntime('rockhopper', 'ROCKHOPPER', vehicleSuite.rockhopper, VEHICLE_PROFILES.rockhopper, vehicleSuite.rockhopper.chassis),
+  createVehicleRuntime('dustcrawler', 'DUSTCRAWLER', vehicleSuite.dustcrawler, VEHICLE_PROFILES.dustcrawler, vehicleSuite.dustcrawler.body),
+  createVehicleRuntime('zephyr-skimmer', 'ZEPHYR SKIMMER', vehicleSuite.zephyrSkimmer, VEHICLE_PROFILES['zephyr-skimmer'], vehicleSuite.zephyrSkimmer.driftRoot),
+];
+
+function parkVehicleAtGarageBay(runtime, bay) {
+  scene.add(runtime.root);
+  runtime.root.matrixAutoUpdate = true;
+  runtime.root.position.copy(bay.world.parkingPosition);
+  runtime.root.quaternion.copy(bay.world.parkingQuaternion);
+  runtime.parkedNormal.copy(runtime.root.position).normalize();
+  runtime.parkedHeading.copy(bay.world.outward)
+    .addScaledVector(runtime.parkedNormal, -bay.world.outward.dot(runtime.parkedNormal))
+    .normalize();
+  runtime.parked = true;
+  runtime.root.updateMatrix();
+  runtime.root.matrixAutoUpdate = false;
+}
+
+vehicleRuntimes.forEach((runtime, index) => parkVehicleAtGarageBay(runtime, rockGarage.bays[index]));
+let activeVehicle = null;
+let activeProfile = null;
+let activeVehicleTravelDistance = 0;
+let vehicleLateralSpeed = 0;
+let vehicleVisualAccumulator = 0;
+let garageDepartureCamera = false;
+
 const footRoot = new THREE.Group();
 footRoot.name = 'Alien on foot';
 footRoot.visible = false;
 scene.add(footRoot);
 
-let travelMode = 'driving';
+let travelMode = 'walking';
 let currentWorld = 'mars';
 let footNormal = START_NORMAL.clone();
 let footHeading = new THREE.Vector3(0, 0, -1);
@@ -5562,10 +6389,6 @@ let footVerticalVelocity = 0;
 let footGrounded = true;
 const FOOT_THRUSTER_FUEL_MAX = 3.2;
 const ROVER_THRUSTER_FUEL_MAX = 5.5;
-const ROVER_HOVER_HEIGHT = 14;
-const ROVER_MAX_LIFT_ACCELERATION = 25.5;
-const ROVER_LIFT_SPOOL_UP = 5.8;
-const ROVER_LIFT_SPOOL_DOWN = 13;
 let footThrusterFuel = FOOT_THRUSTER_FUEL_MAX;
 let roverThrusterFuel = ROVER_THRUSTER_FUEL_MAX;
 let footThrusterWasActive = false;
@@ -5889,7 +6712,7 @@ function muteMarsAudio() {
 function updateRoverAudio(speed, throttleInput) {
   if (!audioStarted || !audioEnabled || audioContext.state !== 'running') return;
   const now = audioContext.currentTime;
-  const speedRatio = THREE.MathUtils.clamp(Math.abs(speed) / maxForwardSpeed, 0, 1);
+  const speedRatio = THREE.MathUtils.clamp(Math.abs(speed) / (activeProfile?.maxForwardSpeed || 16), 0, 1);
   const throttle = Math.abs(throttleInput);
   const baseFrequency = 32 + speedRatio * 43 + throttle * 4;
   engineOscillator.frequency.setTargetAtTime(baseFrequency, now, 0.09);
@@ -5985,14 +6808,52 @@ updateAudioIndicator();
 /* ---------- input ---------- */
 
 const keys = {};
+const caveWarpButtonEl = document.getElementById('cave-warp-btn');
 let lookingAtCamera = false;
 let jumpQueued = false;
 let interactionQueued = false;
+
+function warpToMarsStart() {
+  if (travelMode !== 'driving' || caveTravelZone === 'surface') return;
+  caveTravelZone = 'surface';
+  caveRouteDistance = 0;
+  caveRouteFacing = 1;
+  caveLateral = 0;
+  caveLocalPosition.copy(CAVE_ROUTE_POINTS[0]);
+  caveLocalForward.set(0, 0, -1);
+  caveLocalUp.copy(UP);
+  playerNormal.copy(START_NORMAL);
+  playerHeading.set(0, 0, -1);
+  currentWorld = 'mars';
+  driveSpeed = 0;
+  verticalVelocity = 0;
+  jumpHeight = 0;
+  grounded = true;
+  roverLiftSpool = 0;
+  roverThrusterWasActive = false;
+  roverThrusterFuel = activeProfile?.lift.fuel || ROVER_THRUSTER_FUEL_MAX;
+  if (activeVehicle?.thrusterVisual) activeVehicle.thrusterVisual.visible = false;
+  caveDarkness = 0;
+  caveWasInside = false;
+  if (scene.fog === caveFog) scene.fog = null;
+  renderer.toneMappingExposure = 1.12;
+  alien.position.copy(surfaceWorldPosition(START_NORMAL));
+  alien.quaternion.copy(surfaceVehicleQuaternion(START_NORMAL, playerHeading));
+  camLookTarget.copy(alien.position).addScaledVector(START_NORMAL, 2.2);
+  camera.position.copy(alien.position).addScaledVector(START_NORMAL, 18).addScaledVector(playerHeading, -16);
+  camera.up.copy(START_NORMAL);
+  camera.lookAt(camLookTarget);
+  caveWarpButtonEl.classList.remove('show');
+  caveWarpButtonEl.setAttribute('aria-hidden', 'true');
+  showBanner(`WARP COMPLETE · ${activeVehicle?.label || 'VEHICLE'} AT MARS START`);
+}
+
 window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   keys[key] = true;
   if (key === 'f' && !e.repeat) lookingAtCamera = !lookingAtCamera;
   if (key === 'e' && !e.repeat) interactionQueued = true;
+  if (key === 'r' && !e.repeat) warpToMarsStart();
   if ((key === ' ' || key === 'spacebar') && !e.repeat) {
     e.preventDefault();
     jumpQueued = true;
@@ -6038,51 +6899,93 @@ document.getElementById('action-btn').addEventListener('pointerdown', (e) => {
   interactionQueued = true;
 });
 
-/* ---------- portfolio panel ---------- */
+caveWarpButtonEl.addEventListener('click', (e) => {
+  e.preventDefault();
+  warpToMarsStart();
+});
 
-const PROJECTS = [
-  {
-    title: '911 Call Forecasting Dashboard',
-    desc: 'Built during my OSU / Levrum internship. Predicts hourly 911 call volumes using analytics and machine learning.',
-    url: 'https://www.levrum.com',
-    label: 'View Company',
-  },
-  {
-    title: 'Resilient Rise Therapy',
-    desc: 'Freelance website for a licensed therapist, with service pages, telehealth info, and SEO-optimized copy. Built with Astro and Tailwind CSS.',
-    url: 'https://resilient-rise.vercel.app',
-    label: 'View Site',
-  },
-  {
-    title: 'Cooking Measurement Converter',
-    desc: 'Responsive web app for converting cooking measurements, with a clean UI supporting common kitchen conversions.',
-    url: 'https://conversionapp.vercel.app',
-    label: 'Try Live App',
-  },
-  {
-    title: 'Web Skills Showcase',
-    desc: 'A web development project demonstrating responsive design, accessibility, and modern web standards.',
-    url: 'https://web-dev-project-teal.vercel.app/index.html',
-    label: 'View Website',
-  },
-  {
-    title: 'Trail First-Aid Checklist',
-    desc: 'Work in progress: a hiking trip planner generating gear and first-aid checklists tailored to distance, terrain, season, and elevation. Java/Spring Boot backend, vanilla JS frontend.',
-    url: 'https://trail-first-aid-checklist.vercel.app',
-    label: 'Try It',
-  },
-];
+/* ---------- portfolio panel ---------- */
 
 const portfolioPanelEl = document.getElementById('portfolio-panel');
 const portfolioGridEl = document.getElementById('portfolio-grid');
 PROJECTS.forEach((p) => {
   const card = document.createElement('div');
   card.className = 'project-card';
-  card.innerHTML = `<h3>${p.title}</h3><p>${p.desc}</p><a href="${p.url}" target="_blank" rel="noopener noreferrer">${p.label}</a>`;
+  card.innerHTML = `
+    <div class="project-preview-shell">
+      <img class="project-preview" src="${p.preview}" alt="Snapshot of ${p.title}" loading="lazy" referrerpolicy="no-referrer">
+      <span>LIVE SITE SNAPSHOT</span>
+    </div>
+    <div class="project-card-body">
+      <h3>${p.title}</h3>
+      <p>${p.desc}</p>
+      <a href="${p.url}" target="_blank" rel="noopener noreferrer">${p.label} <b aria-hidden="true">↗</b></a>
+    </div>`;
+  card.querySelector('.project-preview').addEventListener('error', () => card.classList.add('preview-unavailable'), { once: true });
   portfolioGridEl.appendChild(card);
 });
 const PORTFOLIO_HUB_KEY = 'outpost';
-const PORTFOLIO_REVEAL_RADIUS = 13;
+const PORTFOLIO_REVEAL_RADIUS = 11.5;
+let ufoInteriorActive = false;
+let ufoProjectScreensRequested = false;
+
+function isNearUfoEntry(normal) {
+  if (currentWorld !== 'mars' || !normal) return false;
+  const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  return arcDistanceForWorld('mars', normal, portfolioHub.normal) < PORTFOLIO_REVEAL_RADIUS;
+}
+
+function loadUfoProjectScreens() {
+  if (ufoProjectScreensRequested) return;
+  ufoProjectScreensRequested = true;
+  const textureLoader = new THREE.TextureLoader();
+  textureLoader.setCrossOrigin('anonymous');
+  hubRuntime.outpost.projectScreens.forEach((screen) => {
+    textureLoader.load(screen.project.preview, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      const placeholder = screen.material.map;
+      screen.material.map = texture;
+      screen.material.needsUpdate = true;
+      screen.loaded = true;
+      placeholder?.dispose();
+    }, undefined, () => {
+      screen.loaded = false;
+    });
+  });
+}
+
+function enterUfoInterior() {
+  if (travelMode !== 'walking' || !isNearUfoEntry(footNormal)) return;
+  ufoInteriorActive = true;
+  footSpeed = 0;
+  footJumpHeight = 0;
+  footVerticalVelocity = 0;
+  footGrounded = true;
+  footRoot.visible = false;
+  alienDriver.thrusterFlames.visible = false;
+  hubRuntime.outpost.interiorGallery.visible = true;
+  loadUfoProjectScreens();
+  showBanner("PROJECT ARCHIVE ONLINE · CAITLIN'S SCREENS RESTORED");
+}
+
+function exitUfoInterior() {
+  if (!ufoInteriorActive) return;
+  ufoInteriorActive = false;
+  hubRuntime.outpost.interiorGallery.visible = false;
+  const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const towardLanding = START_NORMAL.clone()
+    .addScaledVector(portfolioHub.normal, -START_NORMAL.dot(portfolioHub.normal))
+    .normalize();
+  footNormal.copy(stepWorldNormal(portfolioHub.normal, towardLanding, 10.5, PLANET_RADIUS));
+  footHeading.copy(portfolioHub.normal)
+    .addScaledVector(footNormal, -portfolioHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  showBanner('UFO HATCH OPEN · RETURNED TO MARS');
+}
 
 const CONTACT_LINKS = [
   { label: 'Email', desc: 'baxc1722@gmail.com', url: 'mailto:baxc1722@gmail.com' },
@@ -6099,13 +7002,13 @@ CONTACT_LINKS.forEach((c) => {
   card.innerHTML = `<h3>${c.label}</h3><p>${c.desc}</p><a href="${c.url}" target="_blank" rel="noopener noreferrer">Open</a>`;
   contactGridEl.appendChild(card);
 });
-const CONTACT_HUB_KEY = 'cavern';
+const CONTACT_HUB_KEY = 'crash';
 const CONTACT_REVEAL_RADIUS = 13;
 
 /* ---------- HUD ---------- */
 
 const hubListEl = document.getElementById('hub-list');
-HUBS.forEach((hub) => {
+SURFACE_WAYPOINT_HUBS.forEach((hub) => {
   const row = document.createElement('div');
   row.className = 'hub-row';
   row.id = `hub-row-${hub.key}`;
@@ -6125,8 +7028,10 @@ function showBanner(text) {
 function discoverHub(hub) {
   hub.discovered = true;
   const row = document.getElementById(`hub-row-${hub.key}`);
-  row.classList.add('found');
-  row.querySelector('.mark').innerHTML = '&#10003;';
+  if (row) {
+    row.classList.add('found');
+    row.querySelector('.mark').innerHTML = '&#10003;';
+  }
   showBanner(`Discovered: ${hub.name}`);
 }
 
@@ -6586,30 +7491,128 @@ function attachAlienOnFoot(world, normal, heading) {
   orientSurfaceRoot(footRoot, footNormal, footHeading);
 }
 
-function exitRover() {
+// Begin on foot within sight of the motor cavern instead of pre-simulating a
+// vehicle. Every parked craft remains a static scene object until it is chosen.
+attachAlienOnFoot('mars', GARAGE_SPAWN_NORMAL, GARAGE_SPAWN_HEADING);
+
+function exitActiveVehicle() {
+  if (!activeVehicle || !activeProfile) return;
   if (caveTravelZone !== 'surface') {
-    showBanner('CAVE ROAD SAFETY · EXIT ROVER ON THE SURFACE');
+    showBanner('CAVE ROAD SAFETY · EXIT VEHICLE ON THE SURFACE');
     return;
   }
-  if (Math.abs(driveSpeed) > 1.2 || !grounded) {
-    showBanner('STOP ROVER TO EXIT');
+  if (Math.abs(driveSpeed) > activeProfile.exitSpeed || !grounded) {
+    showBanner(`STOP ${activeVehicle.label} TO EXIT`);
     return;
   }
-  const exitDirection = playerHeading.clone().cross(playerNormal).normalize();
-  const exitNormal = stepWorldNormal(playerNormal, exitDirection, 2.75, PLANET_RADIUS);
-  attachAlienOnFoot('mars', exitNormal, playerHeading);
+  const parkedVehicle = activeVehicle;
+  if (parkedVehicle.thrusterVisual) parkedVehicle.thrusterVisual.visible = false;
+  scene.add(parkedVehicle.root);
+  parkedVehicle.root.matrixAutoUpdate = true;
+  parkedVehicle.root.position.copy(surfaceWorldPosition(playerNormal, 0.08));
+  parkedVehicle.root.quaternion.copy(surfaceVehicleQuaternion(playerNormal, playerHeading));
+  if (parkedVehicle.chassis !== parkedVehicle.root) {
+    parkedVehicle.chassis.rotation.x = 0;
+    parkedVehicle.chassis.rotation.z = 0;
+    parkedVehicle.chassis.position.y = parkedVehicle.chassisBaseY || 0;
+  }
+  parkedVehicle.parkedNormal.copy(playerNormal);
+  parkedVehicle.parkedHeading.copy(playerHeading);
+  parkedVehicle.parked = true;
+  parkedVehicle.root.updateMatrix();
+  parkedVehicle.root.matrixAutoUpdate = false;
+  const exitingGarageBay = arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) < 15;
+  const exitDirection = exitingGarageBay
+    ? playerHeading.clone()
+    : playerHeading.clone().cross(playerNormal).normalize();
+  const exitNormal = stepWorldNormal(
+    playerNormal,
+    exitDirection,
+    exitingGarageBay ? 7 : activeProfile.collisionRadius + 2.15,
+    PLANET_RADIUS
+  );
+  const exitHeading = exitingGarageBay ? playerHeading.clone().multiplyScalar(-1) : playerHeading;
+  attachAlienOnFoot('mars', exitNormal, exitHeading);
   travelMode = 'walking';
   driveSpeed = 0;
-  showBanner('ROVER PARKED · ALIEN ON FOOT');
+  vehicleLateralSpeed = 0;
+  garageDepartureCamera = false;
+  lookingAtCamera = false;
+  activeVehicle = null;
+  activeProfile = null;
+  drivingCourses.reset();
+  drivingCoursePrompt = '';
+  activeDrivingCourse = null;
+  showBanner(`${parkedVehicle.label} PARKED · ALIEN ON FOOT`);
 }
 
-function enterRover() {
-  roverChassis.add(alienDriver.alien);
+function poseAlienForVehicle(runtime) {
+  alienDriver.thrusterFlames.visible = false;
+  runtime.seat.add(alienDriver.alien);
+  alienDriver.alien.scale.setScalar(runtime.profile.driverScale);
+  alienDriver.alien.position.set(...runtime.profile.driverPosition);
+  alienDriver.alien.rotation.set(0, 0, 0);
+  legs.forEach((leg) => {
+    leg.thigh.rotation.x = -1.3;
+    leg.shin.rotation.x = 1.45;
+  });
+  arms.forEach((arm, index) => {
+    arm.upper.rotation.x = 1.12;
+    arm.upper.rotation.z = index === 0 ? -0.18 : 0.18;
+    arm.fore.rotation.x = 0.34;
+  });
+}
+
+function findNearestBoardableVehicle(normal, maximumDistance = Infinity) {
+  let nearest = null;
+  let nearestDistance = maximumDistance;
+  vehicleRuntimes.forEach((runtime) => {
+    if (!runtime.parked) return;
+    const distance = arcDistanceForWorld('mars', normal, runtime.parkedNormal);
+    const boardDistance = Math.min(nearestDistance, runtime.profile.boardRadius);
+    if (distance <= boardDistance) {
+      nearest = runtime;
+      nearestDistance = distance;
+    }
+  });
+  return nearest ? { runtime: nearest, distance: nearestDistance } : null;
+}
+
+function boardVehicle(runtime) {
+  if (!runtime?.parked) return;
+  playerNormal.copy(runtime.parkedNormal);
+  playerHeading.copy(runtime.parkedHeading)
+    .addScaledVector(playerNormal, -runtime.parkedHeading.dot(playerNormal))
+    .normalize();
+  runtime.root.matrixAutoUpdate = true;
+  alien.add(runtime.root);
+  runtime.root.position.set(0, 0, 0);
+  runtime.root.quaternion.identity();
+  runtime.root.scale.setScalar(1);
+  runtime.parked = false;
+  runtime.chassisBaseY = runtime.chassis.position.y;
+  activeVehicle = runtime;
+  activeProfile = runtime.profile;
+  activeVehicleTravelDistance = runtime.motionDistance || 0;
+  vehicleLateralSpeed = 0;
+  terrainSampleAccumulator = Infinity;
+  vehicleVisualAccumulator = 0;
+  driveSpeed = 0;
+  verticalVelocity = 0;
+  jumpHeight = 0;
+  grounded = true;
+  roverLiftSpool = 0;
+  roverThrusterWasActive = false;
+  roverThrusterFuel = activeProfile.lift.fuel;
+  garageDepartureCamera = arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) < 15;
+  if (garageDepartureCamera) lookingAtCamera = true;
+  alien.position.copy(surfaceWorldPosition(playerNormal));
+  alien.quaternion.copy(surfaceVehicleQuaternion(playerNormal, playerHeading));
+  poseAlienForVehicle(runtime);
   footRoot.visible = false;
-  poseAlienForRover();
   travelMode = 'driving';
   currentWorld = 'mars';
-  showBanner('ALIEN BACK IN THE G-ROVER');
+  showBanner(`${runtime.label} ONLINE · ${runtime.profile.locomotion.toUpperCase()} PHYSICS`);
 }
 
 function poseAlienForShuttle() {
@@ -6799,7 +7802,7 @@ function handleInteraction() {
   interactionQueued = false;
 
   if (travelMode === 'driving') {
-    exitRover();
+    exitActiveVehicle();
     return;
   }
 
@@ -6816,6 +7819,14 @@ function handleInteraction() {
   }
 
   if (travelMode !== 'walking') return;
+  if (ufoInteriorActive) {
+    exitUfoInterior();
+    return;
+  }
+  if (currentWorld === 'mars' && isNearUfoEntry(footNormal)) {
+    enterUfoInterior();
+    return;
+  }
   if (isNearHyperBike(footNormal)) {
     boardHyperBike();
     return;
@@ -6849,8 +7860,9 @@ function handleInteraction() {
     return;
   }
 
-  if (currentWorld === 'mars' && arcDistanceForWorld('mars', footNormal, playerNormal) < 3.8) {
-    enterRover();
+  const nearbyVehicle = currentWorld === 'mars' ? findNearestBoardableVehicle(footNormal) : null;
+  if (nearbyVehicle) {
+    boardVehicle(nearbyVehicle.runtime);
     return;
   }
 
@@ -6942,6 +7954,17 @@ function updateShuttleFlight(dt, time) {
 }
 
 function updateOnFoot(dt, time, throttleInput, steeringInput) {
+  if (ufoInteriorActive) {
+    footSpeed = 0;
+    footJumpHeight = 0;
+    footVerticalVelocity = 0;
+    footGrounded = true;
+    jumpQueued = false;
+    footThrusterWasActive = false;
+    alienDriver.thrusterFlames.visible = false;
+    updateThrusterAudio(false, false, 0);
+    return;
+  }
   const radius = currentWorld === 'moon' ? MOON_RADIUS : currentWorld === 'zephyra' ? ZEPHYRA_RADIUS : PLANET_RADIUS;
   const walkTarget = throttleInput * (currentWorld === 'moon' ? 3.8 : currentWorld === 'zephyra' ? 4.4 : 4.8);
   footSpeed = THREE.MathUtils.damp(footSpeed, walkTarget, throttleInput === 0 ? 6 : 8, dt);
@@ -7045,10 +8068,19 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
 }
 
 function updateTravelPrompt() {
+  const caveWarpAvailable = travelMode === 'driving' && caveTravelZone !== 'surface';
+  caveWarpButtonEl.classList.toggle('show', caveWarpAvailable);
+  caveWarpButtonEl.setAttribute('aria-hidden', String(!caveWarpAvailable));
   if (travelMode === 'driving') {
-    if (caveTravelZone === 'tunnel') setInteractionPrompt('FOLLOW GLOWSTONE ROAD · REVERSE TO RETURN TO MARS');
-    else if (caveTravelZone === 'chamber') setInteractionPrompt(`MORROW: ${hubRuntime.nightfall.bearActivity.toUpperCase()} · FIND THE LIT TUNNEL TO EXIT`);
-    else setInteractionPrompt(Math.abs(driveSpeed) < 1.2 && grounded ? 'E · EXIT G-ROVER' : 'STOP TO EXIT G-ROVER');
+    if (caveTravelZone === 'tunnel') setInteractionPrompt('FOLLOW GLOWSTONE ROAD · REVERSE OUT OR WARP TO START');
+    else if (caveTravelZone === 'chamber') setInteractionPrompt(`MORROW: ${hubRuntime.nightfall.bearActivity.toUpperCase()} · R OR BUTTON TO WARP HOME`);
+    else if (drivingCoursePrompt) setInteractionPrompt(`${drivingCoursePrompt} · E EXIT`);
+    else if (arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) < 34) {
+      setInteractionPrompt('3 MARS COURSES · FOLLOW COLORED SKY BEACONS · E EXIT');
+    }
+    else setInteractionPrompt(Math.abs(driveSpeed) < (activeProfile?.exitSpeed || 1.2) && grounded
+      ? `E · EXIT ${activeVehicle?.label || 'VEHICLE'}`
+      : `STOP TO EXIT ${activeVehicle?.label || 'VEHICLE'}`);
     return;
   }
   if (travelMode === 'boarded') {
@@ -7067,6 +8099,14 @@ function updateTravelPrompt() {
     } else {
       setInteractionPrompt(`E · DISEMBARK ${hyperBikeLocation.toUpperCase()}`);
     }
+    return;
+  }
+  if (ufoInteriorActive) {
+    setInteractionPrompt('E · EXIT CRASHED UFO  /  SELECT ANY PROJECT SCREEN');
+    return;
+  }
+  if (currentWorld === 'mars' && isNearUfoEntry(footNormal)) {
+    setInteractionPrompt("E · ENTER CAITLIN'S PROJECT ARCHIVE");
     return;
   }
   if (isNearHyperBike(footNormal)) {
@@ -7088,10 +8128,13 @@ function updateTravelPrompt() {
     setInteractionPrompt(`E · BOARD SPACE BUS · LEAVES ${Math.max(1, Math.ceil(shuttleDockTimer))} SEC`);
   } else if (nearPad) {
     setInteractionPrompt(`SPACE BUS RETURNS · ${Math.max(1, Math.ceil(shuttleEtaToWorld(currentWorld)))} SEC`);
-  } else if (currentWorld === 'mars' && arcDistanceForWorld('mars', footNormal, playerNormal) < 3.8) {
-    setInteractionPrompt('E · ENTER G-ROVER');
   } else {
-    setInteractionPrompt('WASD · WALK  /  E · USE');
+    const nearbyVehicle = currentWorld === 'mars' ? findNearestBoardableVehicle(footNormal) : null;
+    setInteractionPrompt(nearbyVehicle
+      ? `E · DRIVE ${nearbyVehicle.runtime.label} · ${nearbyVehicle.runtime.profile.locomotion.toUpperCase()}`
+      : currentWorld === 'mars' && arcDistanceForWorld('mars', footNormal, GARAGE_NORMAL) < 28
+        ? 'ARES MOTOR CAVERN · CHOOSE A VEHICLE · FOLLOW COURSE BEACONS'
+        : 'WASD · WALK  /  E · USE');
   }
 }
 
@@ -7120,20 +8163,26 @@ const wheelDust = new THREE.Points(
 scene.add(wheelDust);
 let nextDustParticle = 0;
 let dustSpawnAccumulator = 0;
+const wheelDustRight = new THREE.Vector3();
+const wheelDustGroundPoint = new THREE.Vector3();
+const wheelDustSpawnPoint = new THREE.Vector3();
 
 function spawnWheelDust(dt, speed) {
   dustSpawnAccumulator += dt * Math.min(36, 5 + Math.abs(speed) * 2.4);
   const forward = playerHeading;
-  const right = playerHeading.clone().cross(playerNormal).normalize();
-  const groundPoint = surfaceWorldPosition(playerNormal, 0.35);
+  wheelDustRight.copy(playerHeading).cross(playerNormal).normalize();
+  wheelDustGroundPoint.copy(playerNormal)
+    .multiplyScalar(PLANET_RADIUS + getSurfaceHeight(playerNormal) + 0.35);
   while (dustSpawnAccumulator >= 1) {
     dustSpawnAccumulator -= 1;
     const index = nextDustParticle++ % wheelDustCount;
     const side = Math.random() < 0.5 ? -1 : 1;
-    const position = groundPoint.clone().addScaledVector(forward, -1.5).addScaledVector(right, side * 1.22 + (Math.random() - 0.5) * 0.45);
-    wheelDustPositions[index * 3] = position.x;
-    wheelDustPositions[index * 3 + 1] = position.y;
-    wheelDustPositions[index * 3 + 2] = position.z;
+    wheelDustSpawnPoint.copy(wheelDustGroundPoint)
+      .addScaledVector(forward, -1.5)
+      .addScaledVector(wheelDustRight, side * 1.22 + (Math.random() - 0.5) * 0.45);
+    wheelDustPositions[index * 3] = wheelDustSpawnPoint.x;
+    wheelDustPositions[index * 3 + 1] = wheelDustSpawnPoint.y;
+    wheelDustPositions[index * 3 + 2] = wheelDustSpawnPoint.z;
     wheelDustVelocity[index * 3] = -forward.x * (0.9 + Math.random() * 1.8) + (Math.random() - 0.5) * 0.7;
     wheelDustVelocity[index * 3 + 1] = -forward.y * (0.9 + Math.random() * 1.8) + playerNormal.y * (0.7 + Math.random() * 1.3);
     wheelDustVelocity[index * 3 + 2] = -forward.z * (0.9 + Math.random() * 1.8) + (Math.random() - 0.5) * 0.7;
@@ -7331,15 +8380,16 @@ function configureLunarShadows(root, { cast = true, receive = true } = {}) {
   });
 }
 
-moonSurface.castShadow = true;
+// The deformed Moon already receives directional shading. Casting the entire
+// high-resolution globe into the local shadow map duplicates tens of thousands
+// of terrain triangles and contributes no useful nearby contact shadow.
+moonSurface.castShadow = false;
 moonSurface.receiveShadow = true;
-configureLunarShadows(moonRegolithGeology.group);
-configureLunarShadows(moonColdTrapRuntime.group);
-moonColdTrapRuntime.ejecta.castShadow = false;
-configureLunarShadows(moonRayedCraterRuntime.group);
-moonRayedCraterRuntime.rayFragments.castShadow = false;
-configureLunarShadows(moonLandingPad.group);
-configureLunarShadows(moonBikeLandingPad.group);
+configureLunarShadows(moonRegolithGeology.group, { cast: false });
+configureLunarShadows(moonColdTrapRuntime.group, { cast: false });
+configureLunarShadows(moonRayedCraterRuntime.group, { cast: false });
+configureLunarShadows(moonLandingPad.group, { cast: false });
+configureLunarShadows(moonBikeLandingPad.group, { cast: false });
 configureLunarShadows(moonCommandRuntime.group);
 configureLunarShadows(moonFriendRuntime.root, { receive: false });
 configureLunarShadows(moonShuttle, { receive: false });
@@ -7403,33 +8453,282 @@ const forwardVec = new THREE.Vector3();
 const rightVec = new THREE.Vector3();
 const backVec = new THREE.Vector3();
 const travelAxis = new THREE.Vector3();
+const candidateVehicleNormal = new THREE.Vector3();
+const candidateVehicleHeading = new THREE.Vector3();
+const vehicleMotionDirection = new THREE.Vector3();
+const terrainSampleNormal = new THREE.Vector3();
+const terrainSampleAxis = new THREE.Vector3();
 const orientationMatrix = new THREE.Matrix4();
 const targetRoverQuaternion = new THREE.Quaternion();
-const maxForwardSpeed = 16;
-const maxReverseSpeed = 8;
-const turnSpeed = 1.65;
-const roverRadius = 1.45;
 const marsGravity = -3.73;
 let driveSpeed = 0;
 let verticalVelocity = 0;
 let jumpHeight = 0;
 let grounded = true;
 let suspensionPhase = 0;
+let terrainSampleAccumulator = Infinity;
+let cachedFrontHeight = 0;
+let cachedRearHeight = 0;
+let cachedRightHeight = 0;
+let cachedLeftHeight = 0;
 
 const speedValueEl = document.getElementById('speed-value');
 const elevationValueEl = document.getElementById('elevation-value');
 
 const clock = new THREE.Clock();
+const environmentUpdateInterval = isTouchDevice ? 1 / 24 : 1 / 30;
+let environmentUpdateAccumulator = environmentUpdateInterval;
+let performanceSampleTime = 0;
+let performanceSampleFrames = 0;
+let highPerformanceSamples = 0;
+const hudUpdateInterval = isTouchDevice ? 1 / 10 : 1 / 12;
+let hudUpdateAccumulator = hudUpdateInterval;
 
-function steppedSurfaceNormal(normal, direction, distance) {
-  const axis = new THREE.Vector3().crossVectors(normal, direction).normalize();
-  return normal.clone().applyAxisAngle(axis, distance / PLANET_RADIUS).normalize();
+// Keep each explorable world's expensive foreground content resident only while
+// the camera is near that world. The inexpensive planet shells stay visible in
+// space, so interplanetary views and transit silhouettes are unchanged.
+const worldDetailObjects = {
+  mars: [
+    marsRockField,
+    ...marsTrailMeshes,
+    ...marsSignposts,
+    airborneDust,
+    aeolianSaltation.points,
+    marsDustFront.group,
+    ...dustDevils.map((devil) => devil.points),
+    marsEscarpmentRuntime.group,
+    marsEscarpmentRuntime.landmarkLabel,
+    marsYardangRuntime.group,
+    marsYardangRuntime.landmarkLabel,
+    marsImpactBasinRuntime.group,
+    marsImpactBasinRuntime.landmarkLabel,
+    ...Object.values(hubRuntime).map((runtime) => runtime.group),
+    ...SPEAKER_STATIONS.map((station) => station.runtime.group),
+    marsLandingPad.group,
+    rockGarage.root,
+    drivingCourses.root,
+    ...vehicleRuntimes.map((runtime) => runtime.root),
+    wheelDust,
+  ],
+  moon: [
+    moonRegolithGeology.group,
+    moonColdTrapRuntime.group,
+    moonRayedCraterRuntime.group,
+    moonLandingPad.group,
+    moonBikeLandingPad.group,
+    moonCommandPath,
+    moonCommandRuntime.group,
+    moonFriendRuntime.root,
+    moonFootprints,
+    moonFootDust,
+  ],
+  zephyra: [
+    zephyraBikeLandingPad.group,
+    zephyraStormRuntime.group,
+    zephyraCanyonRuntime.group,
+    zephyraFluxRuntime.group,
+    zephyraAuroraRuntime.group,
+    zephyraGroveRuntime.group,
+  ],
+};
+const worldDetailResidency = { mars: null, moon: null, zephyra: null };
+const worldDetailThresholds = {
+  mars: { show: 125, hide: 180 },
+  moon: { show: 72, hide: 100 },
+  zephyra: { show: 85, hide: 115 },
+};
+
+function resetInactiveWorldState(world) {
+  if (world === 'mars') {
+    marsDustStormBlend = 0;
+    marsDustStormWasNear = false;
+    if (scene.fog === marsDustFog) scene.fog = null;
+    scene.background.copy(clearSpaceColor);
+    sunLight.color.copy(clearSunColor);
+    hemisphereLight.color.copy(clearHemisphereSky);
+    hemisphereLight.groundColor.copy(clearHemisphereGround);
+  } else if (world === 'moon') {
+    moonCommandInterior = 0;
+    moonColdTrapProximity = 0;
+    moonRayedCraterProximity = 0;
+  } else {
+    zephyraStormProximity = 0;
+    zephyraCanyonProximity = 0;
+    zephyraFluxProximity = 0;
+    zephyraAuroraProximity = 0;
+    zephyraGroveProximity = 0;
+  }
+}
+
+function updateWorldDetailStreaming() {
+  const surfaceDistances = {
+    mars: Math.max(0, camera.position.length() - PLANET_RADIUS),
+    moon: Math.max(0, camera.position.distanceTo(MOON_CENTER) - MOON_RADIUS),
+    zephyra: Math.max(0, camera.position.distanceTo(ZEPHYRA_CENTER) - ZEPHYRA_RADIUS),
+  };
+  Object.keys(worldDetailResidency).forEach((world) => {
+    const threshold = worldDetailThresholds[world];
+    const wasResident = worldDetailResidency[world];
+    const shouldBeResident = worldDetailStreamingDisabled || (wasResident === null
+      ? surfaceDistances[world] < threshold.show
+      : surfaceDistances[world] < (wasResident ? threshold.hide : threshold.show));
+    if (shouldBeResident === wasResident) return;
+    worldDetailResidency[world] = shouldBeResident;
+    worldDetailObjects[world].forEach((object) => { object.visible = shouldBeResident; });
+    if (!shouldBeResident) resetInactiveWorldState(world);
+  });
+}
+
+const performanceQuery = new URLSearchParams(window.location.search);
+const performanceDebugEnabled = performanceQuery.has('perf');
+const worldDetailStreamingDisabled = performanceDebugEnabled && performanceQuery.has('no-stream');
+const performanceDebugEl = performanceDebugEnabled ? document.createElement('pre') : null;
+let performanceDebugTime = 0;
+let performanceDebugFrames = 0;
+if (performanceDebugEl) {
+  performanceDebugEl.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:50;margin:0;padding:9px 11px;color:#bfffe9;background:rgba(2,8,12,.82);border:1px solid rgba(120,255,225,.4);font:600 11px/1.4 monospace;pointer-events:none';
+  document.body.appendChild(performanceDebugEl);
+}
+
+function updatePerformanceDebug(dt) {
+  if (!performanceDebugEl) return;
+  performanceDebugTime += dt;
+  performanceDebugFrames += 1;
+  if (performanceDebugTime < 0.5) return;
+  const snapshot = {
+    fps: performanceDebugFrames / performanceDebugTime,
+    calls: renderer.info.render.calls,
+    triangles: renderer.info.render.triangles,
+    geometries: renderer.info.memory.geometries,
+    textures: renderer.info.memory.textures,
+    pixelRatio: currentRenderPixelRatio,
+    residency: { ...worldDetailResidency },
+  };
+  window.__ALIEN_GAME_PERF__ = snapshot;
+  performanceDebugEl.textContent = [
+    `FPS ${snapshot.fps.toFixed(0)} · DPR ${snapshot.pixelRatio.toFixed(2)}`,
+    `CALLS ${snapshot.calls} · TRIS ${snapshot.triangles.toLocaleString()}`,
+    `GPU GEO ${snapshot.geometries} · TEX ${snapshot.textures}`,
+    `DETAIL M:${snapshot.residency.mars ? 'ON' : 'OFF'} L:${snapshot.residency.moon ? 'ON' : 'OFF'} Z:${snapshot.residency.zephyra ? 'ON' : 'OFF'}`,
+    worldDetailStreamingDisabled ? 'STREAMING BYPASS · BENCHMARK' : 'STREAMING ACTIVE',
+  ].join('\n');
+  performanceDebugTime = 0;
+  performanceDebugFrames = 0;
+}
+
+function updateAdaptiveResolution(rawDt) {
+  if (!loadingComplete || document.hidden) return;
+  performanceSampleTime += Math.min(rawDt, 0.25);
+  performanceSampleFrames += 1;
+  if (performanceSampleTime < 2.25) return;
+  const measuredFps = performanceSampleFrames / performanceSampleTime;
+  let nextPixelRatio = currentRenderPixelRatio;
+  if (measuredFps < 44 && currentRenderPixelRatio > renderPixelRatioFloor) {
+    nextPixelRatio = Math.max(renderPixelRatioFloor, currentRenderPixelRatio - 0.12);
+    highPerformanceSamples = 0;
+  } else if (measuredFps > 57 && currentRenderPixelRatio < renderPixelRatioCeiling) {
+    highPerformanceSamples += 1;
+    if (highPerformanceSamples >= 3) {
+      nextPixelRatio = Math.min(renderPixelRatioCeiling, currentRenderPixelRatio + 0.06);
+      highPerformanceSamples = 0;
+    }
+  } else highPerformanceSamples = 0;
+  if (Math.abs(nextPixelRatio - currentRenderPixelRatio) > 0.001) {
+    currentRenderPixelRatio = nextPixelRatio;
+    renderer.setPixelRatio(currentRenderPixelRatio);
+  }
+  performanceSampleTime = 0;
+  performanceSampleFrames = 0;
+}
+
+setLoadingStage(88, 'SYNCHRONIZING ALIEN LIFE SIGNS');
+
+function stepSurfaceNormalInto(out, normal, direction, distance) {
+  terrainSampleAxis.crossVectors(normal, direction).normalize();
+  return out.copy(normal).applyAxisAngle(terrainSampleAxis, distance / PLANET_RADIUS).normalize();
+}
+
+function isActiveVehiclePathBlocked(candidateNormal) {
+  const collisionRadius = activeProfile?.collisionRadius || 1.45;
+  for (const obstacle of obstacles) {
+    const angularRadius = (obstacle.radius + collisionRadius) / PLANET_RADIUS;
+    if (candidateNormal.dot(obstacle.normal) > Math.cos(angularRadius)) return true;
+  }
+  for (const runtime of vehicleRuntimes) {
+    if (!runtime.parked || runtime === activeVehicle) continue;
+    const angularRadius = (runtime.profile.collisionRadius + collisionRadius + 0.4) / PLANET_RADIUS;
+    if (candidateNormal.dot(runtime.parkedNormal) > Math.cos(angularRadius)) return true;
+  }
+  return false;
+}
+
+function updateDrivingCourseGameplay(dt, time) {
+  if (caveTravelZone !== 'surface' || !activeVehicle || !activeProfile) {
+    drivingCoursePrompt = '';
+    activeDrivingCourse = null;
+    return;
+  }
+  const result = drivingCourses.update({
+    normal: playerNormal,
+    speed: driveSpeed,
+    grounded,
+    time,
+    dt,
+  });
+  drivingCoursePrompt = result.prompt || '';
+  activeDrivingCourse = result.activeCourse || null;
+  if (result.boost) {
+    const direction = driveSpeed < 0 ? -1 : 1;
+    const speedLimit = direction > 0 ? activeProfile.maxForwardSpeed * 1.28 : activeProfile.maxReverseSpeed * 1.12;
+    driveSpeed = THREE.MathUtils.clamp(driveSpeed + direction * result.boost, -speedLimit, speedLimit);
+  }
+  if (result.jumpImpulse && grounded) {
+    grounded = false;
+    jumpHeight = Math.max(jumpHeight, 0.04);
+    verticalVelocity = Math.max(verticalVelocity, result.jumpImpulse);
+    roverThrusterFuel = activeProfile.lift.fuel;
+  }
+  if (result.event) showBanner(result.event);
+}
+
+// Focused live-test entry point. It is inert during normal play, but lets the
+// performance overlay and browser QA boot directly into one chosen physics rig.
+const vehicleQaId = performanceQuery.get('vehicle-qa');
+if (vehicleQaId) {
+  const qaVehicle = vehicleRuntimes.find((runtime) => runtime.id === vehicleQaId);
+  if (qaVehicle) {
+    boardVehicle(qaVehicle);
+    const courseQaId = performanceQuery.get('course-qa');
+    const courseQa = courseQaId ? drivingCourses.courses.find((course) => course.id === courseQaId) : null;
+    if (courseQa) {
+      const courseZone = performanceQuery.get('course-zone');
+      const start = courseZone === 'boost'
+        ? courseQa.boostZones[0]
+        : courseZone === 'ramp' ? courseQa.rampZones[0] : courseQa.checkpoints[0];
+      playerNormal.copy(start.normal);
+      playerHeading.copy(start.tangent)
+        .addScaledVector(playerNormal, -start.tangent.dot(playerNormal))
+        .normalize();
+      alien.position.copy(surfaceWorldPosition(playerNormal));
+      alien.quaternion.copy(surfaceVehicleQuaternion(playerNormal, playerHeading));
+      garageDepartureCamera = false;
+      lookingAtCamera = false;
+    }
+    if (performanceQuery.has('qa-drive')) keys.w = true;
+    if (performanceQuery.has('qa-thrust')) {
+      keys[' '] = true;
+      jumpQueued = true;
+    }
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = clock.getDelta();
+  const dt = Math.min(rawDt, 0.05);
   const t = clock.elapsedTime;
+  updateAdaptiveResolution(rawDt);
+  updateWorldDetailStreaming();
 
   const throttleInput = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
   const steeringInput = (keys['a'] || keys['arrowleft'] ? 1 : 0) - (keys['d'] || keys['arrowright'] ? 1 : 0);
@@ -7438,55 +8737,86 @@ function animate() {
   updateShuttleFlight(dt, t);
   updateHyperBikeTravel(dt, t);
 
-  if (travelMode === 'driving') {
-    const caveSpeedLimit = caveTravelZone === 'surface' ? maxForwardSpeed : CAVE_TUNNEL_MAX_SPEED;
-    const targetSpeed = throttleInput > 0 ? caveSpeedLimit : throttleInput < 0 ? -Math.min(maxReverseSpeed, caveSpeedLimit * 0.72) : 0;
-    const acceleration = throttleInput === 0 ? 3.3 : driveSpeed * throttleInput < 0 ? 11 : 5.8;
+  if (travelMode === 'driving' && activeVehicle && activeProfile) {
+    const caveSpeedLimit = caveTravelZone === 'surface'
+      ? activeProfile.maxForwardSpeed
+      : Math.min(CAVE_TUNNEL_MAX_SPEED, activeProfile.caveMaxSpeed);
+    const targetSpeed = throttleInput > 0
+      ? caveSpeedLimit
+      : throttleInput < 0 ? -Math.min(activeProfile.maxReverseSpeed, caveSpeedLimit * 0.72) : 0;
+    const acceleration = throttleInput === 0
+      ? activeProfile.coastDrag
+      : driveSpeed * throttleInput < 0 ? activeProfile.braking : activeProfile.acceleration;
     driveSpeed = THREE.MathUtils.damp(driveSpeed, targetSpeed, acceleration, dt);
     if (Math.abs(driveSpeed) < 0.015) driveSpeed = 0;
     updateRoverAudio(driveSpeed, throttleInput);
 
-    const steerStrength = THREE.MathUtils.clamp(Math.abs(driveSpeed) / 3.2, 0.2, 1);
+    const steerStrength = THREE.MathUtils.clamp(
+      Math.abs(driveSpeed) / activeProfile.fullSteerSpeed,
+      activeProfile.stationarySteering,
+      1
+    );
     const reverseSteer = driveSpeed < -0.1 ? -1 : 1;
-    frontWheelMounts.forEach((mount) => {
-      mount.rotation.y = THREE.MathUtils.damp(mount.rotation.y, steeringInput * 0.42, 10, dt);
-    });
 
     if (
       caveTravelZone === 'surface'
+      && activeProfile.caveAllowed
       && driveSpeed > 0.35
       && playerHeading.dot(CAVE_INWARD_HEADING) > 0.28
       && geodesicDistance(playerNormal, NIGHTFALL_CAVE.normal) < 4.6
     ) enterNightfallDescent();
 
     if (caveTravelZone === 'surface') {
-      playerHeading.applyAxisAngle(playerNormal, steeringInput * reverseSteer * turnSpeed * steerStrength * dt).normalize();
+      playerHeading.applyAxisAngle(
+        playerNormal,
+        steeringInput * reverseSteer * activeProfile.turnRate * steerStrength * dt
+      ).normalize();
       forwardVec.copy(playerHeading);
       rightVec.copy(playerHeading).cross(playerNormal).normalize();
-      const arcDistance = driveSpeed * dt;
-      travelAxis.crossVectors(playerNormal, playerHeading).normalize();
-      const candidateNormal = playerNormal.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
-      const candidateHeading = playerHeading.clone().applyAxisAngle(travelAxis, arcDistance / PLANET_RADIUS).normalize();
-      const blocked = obstacles.some((obstacle) => geodesicDistance(candidateNormal, obstacle.normal) < obstacle.radius + roverRadius);
+      if (activeProfile.locomotion === 'hover-drift') {
+        const lateralTarget = -steeringInput * Math.abs(driveSpeed) * 0.24;
+        vehicleLateralSpeed = THREE.MathUtils.damp(vehicleLateralSpeed, lateralTarget, steeringInput ? 2.2 : 1.35, dt);
+      } else vehicleLateralSpeed = THREE.MathUtils.damp(vehicleLateralSpeed, 0, 8, dt);
+      vehicleMotionDirection.copy(forwardVec).multiplyScalar(driveSpeed);
+      vehicleMotionDirection.addScaledVector(rightVec, vehicleLateralSpeed);
+      const surfaceSpeed = vehicleMotionDirection.length();
+      if (surfaceSpeed > 0.0001) vehicleMotionDirection.multiplyScalar(1 / surfaceSpeed);
+      else vehicleMotionDirection.copy(forwardVec);
+      const motionDistance = surfaceSpeed * dt;
+      travelAxis.crossVectors(playerNormal, vehicleMotionDirection).normalize();
+      candidateVehicleNormal.copy(playerNormal).applyAxisAngle(travelAxis, motionDistance / PLANET_RADIUS).normalize();
+      candidateVehicleHeading.copy(playerHeading).applyAxisAngle(travelAxis, motionDistance / PLANET_RADIUS).normalize();
+      const blocked = isActiveVehiclePathBlocked(candidateVehicleNormal);
       if (!blocked) {
-        playerNormal.copy(candidateNormal);
-        playerHeading.copy(candidateHeading).addScaledVector(playerNormal, -candidateHeading.dot(playerNormal)).normalize();
-      } else driveSpeed *= -0.08;
+        playerNormal.copy(candidateVehicleNormal);
+        playerHeading.copy(candidateVehicleHeading)
+          .addScaledVector(playerNormal, -candidateVehicleHeading.dot(playerNormal))
+          .normalize();
+      } else {
+        driveSpeed *= -activeProfile.collisionBounce;
+        vehicleLateralSpeed *= -0.18;
+      }
+      if (garageDepartureCamera && arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) > 15.5) {
+        garageDepartureCamera = false;
+        lookingAtCamera = false;
+      }
     } else {
       updateCaveNavigation(dt, steeringInput);
     }
 
+    updateDrivingCourseGameplay(dt, t);
+
     if (jumpQueued && grounded) {
-      verticalVelocity = 0.8;
+      verticalVelocity = activeProfile.lift.initialRise;
       grounded = false;
-      roverThrusterFuel = ROVER_THRUSTER_FUEL_MAX;
+      roverThrusterFuel = activeProfile.lift.fuel;
       roverLiftSpool = Math.max(roverLiftSpool, 0.18);
-      showBanner('G-ROVER LIFT FANS SPOOLING · RELEASE TO DROP');
+      showBanner(`${activeVehicle.label} THRUSTERS SPOOLING · RELEASE TO DROP`);
     }
     jumpQueued = false;
     const roverThrusterRequested = !grounded && thrusterHeld && roverThrusterFuel > 0;
     roverLiftSpool = THREE.MathUtils.clamp(
-      roverLiftSpool + (roverThrusterRequested ? ROVER_LIFT_SPOOL_UP : -ROVER_LIFT_SPOOL_DOWN) * dt,
+      roverLiftSpool + (roverThrusterRequested ? activeProfile.lift.spoolUp : -activeProfile.lift.spoolDown) * dt,
       0,
       1
     );
@@ -7495,21 +8825,24 @@ function animate() {
       ? (Math.sin(t * 29.5) > -0.12 ? 1 : 0.14) * (Math.sin(t * 67) > 0.25 ? 1 : 0.74)
       : 0;
     if (roverThrusterWasActive && !roverThrusterRequested && !grounded) {
-      verticalVelocity = Math.min(verticalVelocity, -2.8);
+      verticalVelocity = Math.min(verticalVelocity, activeProfile.lift.dropSpeed);
       if (jumpHeight > 0.9) showBanner('THRUST CUT · HARD DROP');
     }
     roverThrusterWasActive = roverThrusterRequested;
-    roverThrusters.visible = roverLiftSpool > 0.025;
+    if (activeVehicle.thrusterVisual) activeVehicle.thrusterVisual.visible = roverLiftSpool > 0.025;
     if (roverThrusterActive) {
       roverThrusterFuel = Math.max(0, roverThrusterFuel - dt);
-      const hoverError = THREE.MathUtils.clamp((ROVER_HOVER_HEIGHT - jumpHeight) / ROVER_HOVER_HEIGHT, -0.65, 1);
+      const hoverError = THREE.MathUtils.clamp(
+        (activeProfile.lift.targetHeight - jumpHeight) / activeProfile.lift.targetHeight,
+        -0.65,
+        1
+      );
       const liftCommand = THREE.MathUtils.clamp(0.18 + hoverError * 0.72 - verticalVelocity * 0.07, 0, 1);
       const groundEffect = 1 + Math.max(0, 1 - jumpHeight / 5) * 0.28;
       const fanTurbulence = Math.sin(t * 41) * 0.25 + Math.sin(t * 73) * 0.14;
       const pulseEfficiency = 0.78 + roverThrusterPulse * 0.22;
-      const liftAcceleration = ROVER_MAX_LIFT_ACCELERATION * liftCommand * groundEffect * roverLiftSpool * pulseEfficiency + fanTurbulence;
-      verticalVelocity = Math.min(11.5, verticalVelocity + liftAcceleration * dt);
-      roverThrusters.scale.y = (0.3 + roverThrusterPulse * 0.82) * (0.45 + roverLiftSpool * 0.55);
+      const liftAcceleration = activeProfile.lift.acceleration * liftCommand * groundEffect * roverLiftSpool * pulseEfficiency + fanTurbulence;
+      verticalVelocity = Math.min(activeProfile.lift.maxRise, verticalVelocity + liftAcceleration * dt);
       if (jumpHeight < 6 && caveTravelZone === 'surface') spawnWheelDust(dt * 1.8, 8 + roverThrusterPulse * 6);
     }
     updateThrusterAudio(roverLiftSpool > 0.015, true, roverThrusterPulse * roverLiftSpool);
@@ -7522,30 +8855,66 @@ function animate() {
         grounded = true;
         roverThrusterWasActive = false;
         roverLiftSpool = 0;
-        roverThrusters.visible = false;
-        roverChassis.position.y = 0.16;
+        if (activeVehicle.thrusterVisual) activeVehicle.thrusterVisual.visible = false;
+        activeVehicle.chassis.position.y = activeVehicle.chassisBaseY || 0;
       }
     } else {
-      roverThrusterFuel = Math.min(ROVER_THRUSTER_FUEL_MAX, roverThrusterFuel + dt * 1.7);
+      roverThrusterFuel = Math.min(activeProfile.lift.fuel, roverThrusterFuel + dt * 1.7);
     }
 
-    const frontHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, 1.45)) : 0;
-    const rearHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, playerHeading, -1.45)) : 0;
-    const rightHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, 1.25)) : 0;
-    const leftHeight = caveTravelZone === 'surface' ? getSurfaceHeight(steppedSurfaceNormal(playerNormal, rightVec, -1.25)) : 0;
-    const targetPitch = grounded ? Math.atan2(frontHeight - rearHeight, 2.9) : -verticalVelocity * 0.018 + (roverThrusterActive ? Math.sin(t * 57) * 0.012 : 0);
+    terrainSampleAccumulator += dt;
+    const terrainSampleInterval = 1 / activeProfile.terrainHz;
+    if (caveTravelZone !== 'surface') {
+      cachedFrontHeight = cachedRearHeight = cachedRightHeight = cachedLeftHeight = 0;
+    } else if (terrainSampleAccumulator >= terrainSampleInterval) {
+      terrainSampleAccumulator %= terrainSampleInterval;
+      cachedFrontHeight = getSurfaceHeight(stepSurfaceNormalInto(
+        terrainSampleNormal,
+        playerNormal,
+        playerHeading,
+        activeProfile.halfWheelbase
+      ));
+      cachedRearHeight = getSurfaceHeight(stepSurfaceNormalInto(
+        terrainSampleNormal,
+        playerNormal,
+        playerHeading,
+        -activeProfile.halfWheelbase
+      ));
+      cachedRightHeight = getSurfaceHeight(stepSurfaceNormalInto(
+        terrainSampleNormal,
+        playerNormal,
+        rightVec,
+        activeProfile.halfTrack
+      ));
+      cachedLeftHeight = getSurfaceHeight(stepSurfaceNormalInto(
+        terrainSampleNormal,
+        playerNormal,
+        rightVec,
+        -activeProfile.halfTrack
+      ));
+    }
+    const targetPitch = grounded
+      ? Math.atan2(cachedFrontHeight - cachedRearHeight, activeProfile.halfWheelbase * 2)
+      : -verticalVelocity * 0.018 + (roverThrusterActive ? Math.sin(t * 57) * 0.012 : 0);
     const targetRoll = grounded
-      ? Math.atan2(rightHeight - leftHeight, 2.5) - steeringInput * driveSpeed * 0.0045
+      ? Math.atan2(cachedRightHeight - cachedLeftHeight, activeProfile.halfTrack * 2)
+        - steeringInput * driveSpeed * (activeProfile.locomotion === 'hover-drift' ? 0.008 : 0.0045)
       : roverThrusterActive ? Math.sin(t * 48) * 0.034 + Math.sin(t * 21) * 0.012 : 0;
-    roverChassis.rotation.x = THREE.MathUtils.damp(roverChassis.rotation.x, targetPitch, 7, dt);
-    roverChassis.rotation.z = THREE.MathUtils.damp(roverChassis.rotation.z, targetRoll, 7, dt);
+    activeVehicle.chassis.rotation.x = THREE.MathUtils.damp(activeVehicle.chassis.rotation.x, targetPitch, 7, dt);
+    activeVehicle.chassis.rotation.z = THREE.MathUtils.damp(activeVehicle.chassis.rotation.z, targetRoll, 7, dt);
 
     suspensionPhase += Math.abs(driveSpeed) * dt * 1.8;
     const roadBuzz = grounded ? Math.sin(suspensionPhase) * Math.min(0.055, Math.abs(driveSpeed) * 0.004) : 0;
     const fanBuzz = roverLiftSpool > 0.015
       ? (Math.sin(t * 55) * 0.025 + Math.sin(t * 91) * 0.012) * roverLiftSpool
       : 0;
-    roverChassis.position.y = THREE.MathUtils.damp(roverChassis.position.y, roadBuzz + fanBuzz, grounded ? 9 : 8, dt);
+    const chassisBaseY = activeVehicle.chassisBaseY || 0;
+    activeVehicle.chassis.position.y = THREE.MathUtils.damp(
+      activeVehicle.chassis.position.y,
+      chassisBaseY + roadBuzz + fanBuzz,
+      grounded ? 9 : 8,
+      dt
+    );
 
     if (caveTravelZone === 'surface') {
       rightVec.copy(playerHeading).cross(playerNormal).normalize();
@@ -7556,57 +8925,82 @@ function animate() {
       alien.position.copy(playerNormal).multiplyScalar(PLANET_RADIUS + getSurfaceHeight(playerNormal) + jumpHeight);
     } else placeCaveRover(dt);
 
-    roverWheels.forEach((wheel) => {
-      wheel.rotation.x -= driveSpeed * dt / 0.79;
-    });
+    activeVehicleTravelDistance += driveSpeed * dt;
+    activeVehicle.motionDistance = activeVehicleTravelDistance;
+    vehicleVisualAccumulator += dt;
+    const visualInterval = activeVehicle.id === 'dustcrawler' ? 1 / (isTouchDevice ? 20 : 30) : 0;
+    if (vehicleVisualAccumulator >= visualInterval) {
+      vehicleVisualAccumulator = visualInterval ? vehicleVisualAccumulator % visualInterval : 0;
+      activeVehicle.updateMotion?.({
+        distance: activeVehicleTravelDistance,
+        steering: steeringInput,
+        speed: driveSpeed,
+        thrust: roverLiftSpool * (0.45 + roverThrusterPulse * 0.55),
+        time: t,
+      });
+    }
     arms.forEach((arm, index) => {
       arm.upper.rotation.x = 1.12 + Math.sin(t * 2.2 + index) * Math.min(0.08, Math.abs(driveSpeed) * 0.006);
       arm.fore.rotation.x = 0.34 + steeringInput * (index === 0 ? -0.2 : 0.2);
     });
     alienDriver.body.scale.y = 1 + Math.sin(t * 1.35) * 0.018;
     alienDriver.alien.rotation.z = Math.sin(t * 0.72) * 0.018 - steeringInput * 0.018;
-    if (caveTravelZone === 'surface' && grounded && Math.abs(driveSpeed) > 1.4) spawnWheelDust(dt, driveSpeed);
+    if (caveTravelZone === 'surface' && grounded && Math.abs(driveSpeed) > 1.4) {
+      spawnWheelDust(dt * activeProfile.dustScale, driveSpeed);
+    }
   } else if (travelMode === 'walking') {
     driveSpeed = THREE.MathUtils.damp(driveSpeed, 0, 8, dt);
     updateRoverAudio(0, 0);
-    frontWheelMounts.forEach((mount) => {
-      mount.rotation.y = THREE.MathUtils.damp(mount.rotation.y, 0, 8, dt);
-    });
     updateOnFoot(dt, t, throttleInput, steeringInput);
   } else {
     driveSpeed = THREE.MathUtils.damp(driveSpeed, 0, 8, dt);
     updateRoverAudio(0, 0);
     jumpQueued = false;
     updateThrusterAudio(false, false, 0);
-    roverThrusters.visible = false;
+    if (activeVehicle?.thrusterVisual) activeVehicle.thrusterVisual.visible = false;
     alienDriver.thrusterFlames.visible = false;
     alienDriver.body.scale.y = 1 + Math.sin(t * 1.35) * 0.012;
   }
 
-  updateWheelDust(dt);
-  updateMoonFootDust(dt);
+  if (worldDetailResidency.mars) updateWheelDust(dt);
+  if (worldDetailResidency.moon) updateMoonFootDust(dt);
 
   const activeMarsNormal = travelMode === 'driving' && caveTravelZone === 'surface' ? playerNormal : travelMode === 'walking' && currentWorld === 'mars' ? footNormal : null;
   const activeMarsHeading = travelMode === 'driving' && caveTravelZone === 'surface' ? playerHeading : travelMode === 'walking' && currentWorld === 'mars' ? footHeading : null;
   const activeMarsAltitude = travelMode === 'driving' ? jumpHeight : travelMode === 'walking' && currentWorld === 'mars' ? footJumpHeight : 0;
   const activeMoonNormal = travelMode === 'walking' && currentWorld === 'moon' ? footNormal : null;
   const activeZephyraNormal = travelMode === 'walking' && currentWorld === 'zephyra' ? footNormal : null;
+  const caveSurfaceDistance = activeMarsNormal ? geodesicDistance(activeMarsNormal, NIGHTFALL_CAVE.normal) : Infinity;
+  const caveShouldRender = caveTravelZone !== 'surface' || caveSurfaceDistance < 56;
+  if (hubRuntime.nightfall.group.visible !== caveShouldRender) hubRuntime.nightfall.group.visible = caveShouldRender;
   updateSpeakerStations(t, activeMarsNormal, activeMarsHeading);
   updateLunarLighting(dt, t);
-  updateMarsDustFront(dt, t, activeMarsNormal);
-  updateMarsSedimentaryEscarpment(dt, t, activeMarsNormal);
-  updateMarsYardangField(dt, t, activeMarsNormal);
-  updateMarsImpactBasin(dt, t, activeMarsNormal);
-  updateMoonCommandCenter(dt, t, activeMoonNormal);
-  updateMoonFriend(dt, t, activeMoonNormal);
-  updateMoonColdTrap(dt, t, activeMoonNormal);
-  updateMoonRayedCrater(dt, t, activeMoonNormal);
-  updateZephyraStorm(dt, t, activeZephyraNormal);
-  updateZephyraIonCanyon(dt, t, activeZephyraNormal);
-  updateZephyraFluxWell(dt, t, activeZephyraNormal);
-  updateZephyraAuroralSquall(dt, t, activeZephyraNormal);
-  updateZephyraPiezoelectricGrove(dt, t, activeZephyraNormal);
-  updateNightfallWorld(dt, t);
+  environmentUpdateAccumulator += dt;
+  if (environmentUpdateAccumulator >= environmentUpdateInterval) {
+    const environmentDt = Math.min(environmentUpdateAccumulator, 0.12);
+    environmentUpdateAccumulator %= environmentUpdateInterval;
+    if (worldDetailResidency.mars) {
+      updateMarsDustFront(environmentDt, t, activeMarsNormal);
+      updateMarsSedimentaryEscarpment(environmentDt, t, activeMarsNormal);
+      updateMarsYardangField(environmentDt, t, activeMarsNormal);
+      updateMarsImpactBasin(environmentDt, t, activeMarsNormal);
+    }
+    if (worldDetailResidency.moon) {
+      updateMoonCommandCenter(environmentDt, t, activeMoonNormal);
+      updateMoonColdTrap(environmentDt, t, activeMoonNormal);
+      updateMoonRayedCrater(environmentDt, t, activeMoonNormal);
+    }
+    // Lumi's autonomous decision loop intentionally continues off-world.
+    updateMoonFriend(environmentDt, t, activeMoonNormal);
+    if (worldDetailResidency.zephyra) {
+      updateZephyraStorm(environmentDt, t, activeZephyraNormal);
+      updateZephyraIonCanyon(environmentDt, t, activeZephyraNormal);
+      updateZephyraFluxWell(environmentDt, t, activeZephyraNormal);
+      updateZephyraAuroralSquall(environmentDt, t, activeZephyraNormal);
+      updateZephyraPiezoelectricGrove(environmentDt, t, activeZephyraNormal);
+    }
+    updateNightfallWorld(environmentDt, t);
+  }
   updateCaveAtmosphere(dt, activeMarsNormal, activeMarsAltitude);
 
   if (activeMarsNormal) for (const hub of HUBS) {
@@ -7615,83 +9009,97 @@ function animate() {
     }
   }
 
-  const portfolioHub = HUBS.find((h) => h.key === PORTFOLIO_HUB_KEY);
-  const nearPortfolio = activeMarsNormal && geodesicDistance(activeMarsNormal, portfolioHub.normal) < PORTFOLIO_REVEAL_RADIUS;
-  portfolioPanelEl.classList.toggle('show', nearPortfolio);
+  portfolioPanelEl.classList.toggle('show', ufoInteriorActive);
 
   const contactHub = HUBS.find((h) => h.key === CONTACT_HUB_KEY);
   const nearContact = activeMarsNormal && geodesicDistance(activeMarsNormal, contactHub.normal) < CONTACT_REVEAL_RADIUS;
   contactPanelEl.classList.toggle('show', nearContact);
 
   const downedUfo = hubRuntime.outpost;
-  downedUfo.rimLights.forEach((light, index) => {
+  if (worldDetailResidency.mars) {
+    downedUfo.rimLights.forEach((light, index) => {
     const flicker = light.damaged
       ? (Math.sin(t * (17 + index)) > 0.58 ? 1 : 0.03)
       : 0.72 + Math.sin(t * 2.4 + light.phase) * 0.28;
     light.material.emissiveIntensity = 0.12 + flicker * 1.85;
-  });
-  downedUfo.interiorLight.intensity = 2.5 + Math.sin(t * 12.7) * 0.85 + Math.sin(t * 31) * 0.28;
-  downedUfo.breachGlow.material.opacity = 0.54 + Math.sin(t * 8.4) * 0.18;
-  const ufoSmokePositions = downedUfo.smoke.geometry.attributes.position;
-  for (let i = 0; i < downedUfo.smokeSpeeds.length; i++) {
-    const baseIndex = i * 3;
-    ufoSmokePositions.array[baseIndex] += dt * 0.055;
-    ufoSmokePositions.array[baseIndex + 1] += dt * downedUfo.smokeSpeeds[i];
-    if (ufoSmokePositions.array[baseIndex + 1] - downedUfo.smokeBases[baseIndex + 1] > 4.8) {
-      ufoSmokePositions.array[baseIndex] = downedUfo.smokeBases[baseIndex];
-      ufoSmokePositions.array[baseIndex + 1] = downedUfo.smokeBases[baseIndex + 1];
-      ufoSmokePositions.array[baseIndex + 2] = downedUfo.smokeBases[baseIndex + 2];
-    }
-  }
-  ufoSmokePositions.needsUpdate = true;
-  downedUfo.sparks.forEach((spark, index) => {
-    const sparkAge = (t * (0.78 + index * 0.035) + spark.phase) % 1;
-    const burst = Math.max(0, Math.sin(t * 10.5 + spark.phase));
-    spark.mesh.visible = burst > 0.43;
-    spark.mesh.position.set(
-      4.72 + Math.sin(spark.phase) * spark.radius * sparkAge,
-      1.38 + sparkAge * 2.45,
-      1.3 + Math.cos(spark.phase) * spark.radius * sparkAge
-    );
-    spark.mesh.scale.setScalar(0.45 + burst * 1.35);
-  });
-
-  const cavern = hubRuntime.cavern;
-  cavern.crystalMaterials.forEach((mat, i) => {
-    mat.emissiveIntensity = 0.5 + Math.sin(t * 1.5 + i) * 0.15;
-  });
-
-  const crash = hubRuntime.crash;
-  crash.light.intensity = 2.2 + Math.sin(t * 13) * 0.4 + (Math.random() - 0.5) * 0.3;
-  const sp = crash.smoke.geometry.attributes.position;
-  for (let i = 0; i < crash.smokeSpeeds.length; i++) {
-    const idx = i * 3 + 1;
-    sp.array[idx] += dt * crash.smokeSpeeds[i];
-    if (sp.array[idx] - crash.smokeBases[idx] > 6) sp.array[idx] = crash.smokeBases[idx];
-  }
-  sp.needsUpdate = true;
-
-  airborneDust.rotation.y += dt * 0.014;
-  airborneDust.rotation.z += dt * 0.003;
-  updateAeolianSaltation(t);
-  marsLandingPad.glowMaterial.emissiveIntensity = 1.05 + Math.sin(t * 2.2) * 0.32;
-  moonLandingPad.glowMaterial.emissiveIntensity = 0.9 + Math.sin(t * 1.7 + 1.3) * 0.26;
-  moonBikeLandingPad.glowMaterial.emissiveIntensity = 1.15 + Math.sin(t * 3.1) * 0.38;
-  zephyraBikeLandingPad.glowMaterial.emissiveIntensity = 1.1 + Math.sin(t * 2.8 + 1.2) * 0.34;
-
-  dustDevils.forEach((devil) => {
-    const positions = devil.points.geometry.attributes.position;
-    devil.seeds.forEach((seed, index) => {
-      seed.angle += dt * seed.speed;
-      seed.y += dt * (0.55 + seed.speed * 0.2);
-      if (seed.y > 9) seed.y = 0;
-      const radius = 0.25 + seed.y * 0.09 + seed.radius * 0.3;
-      positions.array[index * 3] = Math.cos(seed.angle + t * 0.6 + devil.phase) * radius;
-      positions.array[index * 3 + 1] = seed.y;
-      positions.array[index * 3 + 2] = Math.sin(seed.angle + t * 0.6 + devil.phase) * radius;
     });
-    positions.needsUpdate = true;
-  });
+    downedUfo.interiorLight.intensity = 2.5 + Math.sin(t * 12.7) * 0.85 + Math.sin(t * 31) * 0.28;
+    downedUfo.breachGlow.material.opacity = 0.54 + Math.sin(t * 8.4) * 0.18;
+    downedUfo.archiveLight.intensity = 4.6 + Math.sin(t * 2.4) * 0.9;
+    downedUfo.projectScreens.forEach((screen, index) => {
+      const pulse = 0.82 + Math.sin(t * 3.2 + index * 1.3) * 0.18;
+      screen.statusLight.scale.setScalar(pulse);
+      screen.statusLight.material.opacity = pulse;
+    });
+    const ufoSmokePositions = downedUfo.smoke.geometry.attributes.position;
+    for (let i = 0; i < downedUfo.smokeSpeeds.length; i++) {
+      const baseIndex = i * 3;
+      ufoSmokePositions.array[baseIndex] += dt * 0.055;
+      ufoSmokePositions.array[baseIndex + 1] += dt * downedUfo.smokeSpeeds[i];
+      if (ufoSmokePositions.array[baseIndex + 1] - downedUfo.smokeBases[baseIndex + 1] > 4.8) {
+        ufoSmokePositions.array[baseIndex] = downedUfo.smokeBases[baseIndex];
+        ufoSmokePositions.array[baseIndex + 1] = downedUfo.smokeBases[baseIndex + 1];
+        ufoSmokePositions.array[baseIndex + 2] = downedUfo.smokeBases[baseIndex + 2];
+      }
+    }
+    ufoSmokePositions.needsUpdate = true;
+    downedUfo.sparks.forEach((spark, index) => {
+      const sparkAge = (t * (0.78 + index * 0.035) + spark.phase) % 1;
+      const burst = Math.max(0, Math.sin(t * 10.5 + spark.phase));
+      spark.mesh.visible = burst > 0.43;
+      spark.mesh.position.set(
+        4.72 + Math.sin(spark.phase) * spark.radius * sparkAge,
+        1.38 + sparkAge * 2.45,
+        1.3 + Math.cos(spark.phase) * spark.radius * sparkAge
+      );
+      spark.mesh.scale.setScalar(0.45 + burst * 1.35);
+    });
+
+    const cavern = hubRuntime.cavern;
+    cavern.crystalMaterials.forEach((mat, i) => {
+      mat.emissiveIntensity = 0.5 + Math.sin(t * 1.5 + i) * 0.15;
+    });
+
+    const crash = hubRuntime.crash;
+    crash.light.intensity = 2.2 + Math.sin(t * 13) * 0.4 + (Math.random() - 0.5) * 0.3;
+    const crashSignal = Math.sin(t * 4.8) > 0.28 ? 1 : 0.06;
+    crash.beaconMaterial.emissiveIntensity = 0.15 + crashSignal * 3.2;
+    crash.telemetryMaterial.emissiveIntensity = 0.28 + crashSignal * 1.7 + Math.max(0, Math.sin(t * 17.5)) * 0.35;
+    crash.solarCellMaterial.emissiveIntensity = 0.22 + Math.sin(t * 0.72) * 0.08;
+    const sp = crash.smoke.geometry.attributes.position;
+    for (let i = 0; i < crash.smokeSpeeds.length; i++) {
+      const idx = i * 3 + 1;
+      sp.array[idx] += dt * crash.smokeSpeeds[i];
+      if (sp.array[idx] - crash.smokeBases[idx] > 6) sp.array[idx] = crash.smokeBases[idx];
+    }
+    sp.needsUpdate = true;
+
+    airborneDust.rotation.y += dt * 0.014;
+    airborneDust.rotation.z += dt * 0.003;
+    updateAeolianSaltation(t);
+    marsLandingPad.glowMaterial.emissiveIntensity = 1.05 + Math.sin(t * 2.2) * 0.32;
+
+    dustDevils.forEach((devil) => {
+      const positions = devil.points.geometry.attributes.position;
+      devil.seeds.forEach((seed, index) => {
+        seed.angle += dt * seed.speed;
+        seed.y += dt * (0.55 + seed.speed * 0.2);
+        if (seed.y > 9) seed.y = 0;
+        const radius = 0.25 + seed.y * 0.09 + seed.radius * 0.3;
+        positions.array[index * 3] = Math.cos(seed.angle + t * 0.6 + devil.phase) * radius;
+        positions.array[index * 3 + 1] = seed.y;
+        positions.array[index * 3 + 2] = Math.sin(seed.angle + t * 0.6 + devil.phase) * radius;
+      });
+      positions.needsUpdate = true;
+    });
+  }
+  if (worldDetailResidency.moon) {
+    moonLandingPad.glowMaterial.emissiveIntensity = 0.9 + Math.sin(t * 1.7 + 1.3) * 0.26;
+    moonBikeLandingPad.glowMaterial.emissiveIntensity = 1.15 + Math.sin(t * 3.1) * 0.38;
+  }
+  if (worldDetailResidency.zephyra) {
+    zephyraBikeLandingPad.glowMaterial.emissiveIntensity = 1.1 + Math.sin(t * 2.8 + 1.2) * 0.34;
+  }
 
   sunMaterial.uniforms.uTime.value = t;
   distortedSun.lookAt(camera.position);
@@ -7721,29 +9129,39 @@ function animate() {
       desiredTarget = alien.position.clone().addScaledVector(caveWorldUp, 2.1).addScaledVector(caveWorldForward, 6);
       desiredCameraUp = caveWorldUp;
     } else {
-      const cameraHeight = lookingAtCamera ? 15 : 20;
-      const cameraTrail = lookingAtCamera ? 13 : -18;
+      const cameraHeight = garageDepartureCamera
+        ? 5.4
+        : lookingAtCamera ? Math.max(13, activeProfile.cameraHeight - 5) : activeProfile.cameraHeight;
+      const cameraTrail = garageDepartureCamera
+        ? 12.5
+        : lookingAtCamera ? Math.abs(activeProfile.cameraTrail) * 0.72 : activeProfile.cameraTrail;
       desiredCamPos = alien.position.clone().addScaledVector(playerNormal, cameraHeight).addScaledVector(playerHeading, cameraTrail);
       desiredTarget = alien.position.clone().addScaledVector(playerNormal, 2.2).addScaledVector(playerHeading, lookingAtCamera ? 0 : 3.2);
       desiredCameraUp = playerNormal;
     }
   } else if (travelMode === 'walking') {
-    const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
-    let cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 8.5 : 10.5, lookingAtCamera ? 4.3 : 4.6, interiorCameraBlend);
-    let cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 8 : -11, lookingAtCamera ? 6.2 : -7.5, interiorCameraBlend);
-    cameraHeight = THREE.MathUtils.lerp(cameraHeight, lookingAtCamera ? 4.7 : 4.65, moonCommandInterior);
-    cameraTrail = THREE.MathUtils.lerp(cameraTrail, lookingAtCamera ? 4.2 : -2.8, moonCommandInterior);
-    const commandTargetHeight = THREE.MathUtils.lerp(2.2, 2.5, moonCommandInterior);
-    const commandTargetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 2.2, lookingAtCamera ? 0 : 2.8, moonCommandInterior);
-    desiredCamPos = footRoot.position.clone()
-      .addScaledVector(footNormal, cameraHeight)
-      .addScaledVector(footHeading, cameraTrail);
-    if (!lookingAtCamera && moonCommandInterior > 0.01) {
-      interiorCameraSide.copy(footHeading).cross(footNormal).normalize();
-      desiredCamPos.addScaledVector(interiorCameraSide, moonCommandInterior * 2.35);
+    if (ufoInteriorActive) {
+      desiredCamPos = downedUfo.interiorCameraAnchor.getWorldPosition(new THREE.Vector3());
+      desiredTarget = downedUfo.interiorLookAnchor.getWorldPosition(new THREE.Vector3());
+      desiredCameraUp = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY).normal;
+    } else {
+      const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
+      let cameraHeight = THREE.MathUtils.lerp(lookingAtCamera ? 8.5 : 10.5, lookingAtCamera ? 4.3 : 4.6, interiorCameraBlend);
+      let cameraTrail = THREE.MathUtils.lerp(lookingAtCamera ? 8 : -11, lookingAtCamera ? 6.2 : -7.5, interiorCameraBlend);
+      cameraHeight = THREE.MathUtils.lerp(cameraHeight, lookingAtCamera ? 4.7 : 4.65, moonCommandInterior);
+      cameraTrail = THREE.MathUtils.lerp(cameraTrail, lookingAtCamera ? 4.2 : -2.8, moonCommandInterior);
+      const commandTargetHeight = THREE.MathUtils.lerp(2.2, 2.5, moonCommandInterior);
+      const commandTargetLead = THREE.MathUtils.lerp(lookingAtCamera ? 0 : 2.2, lookingAtCamera ? 0 : 2.8, moonCommandInterior);
+      desiredCamPos = footRoot.position.clone()
+        .addScaledVector(footNormal, cameraHeight)
+        .addScaledVector(footHeading, cameraTrail);
+      if (!lookingAtCamera && moonCommandInterior > 0.01) {
+        interiorCameraSide.copy(footHeading).cross(footNormal).normalize();
+        desiredCamPos.addScaledVector(interiorCameraSide, moonCommandInterior * 2.35);
+      }
+      desiredTarget = footRoot.position.clone().addScaledVector(footNormal, commandTargetHeight).addScaledVector(footHeading, commandTargetLead);
+      desiredCameraUp = footNormal;
     }
-    desiredTarget = footRoot.position.clone().addScaledVector(footNormal, commandTargetHeight).addScaledVector(footHeading, commandTargetLead);
-    desiredCameraUp = footNormal;
   } else if (travelMode === 'hyperbike') {
     if (hyperBikeTransit) {
       desiredCamPos = hyperBike.position.clone()
@@ -7776,25 +9194,28 @@ function animate() {
   camLookTarget.lerp(desiredTarget, 1 - Math.exp(-dt * 8));
   camera.lookAt(camLookTarget);
 
-  const displayedSpeed = travelMode === 'driving'
+  hudUpdateAccumulator += dt;
+  if (hudUpdateAccumulator >= hudUpdateInterval) {
+    hudUpdateAccumulator %= hudUpdateInterval;
+    const displayedSpeed = travelMode === 'driving'
     ? Math.abs(driveSpeed) * 3.6
     : travelMode === 'walking'
       ? Math.abs(footSpeed) * 3.6
       : travelMode === 'hyperbike' ? hyperBikeDisplaySpeed : shuttleDisplaySpeed;
-  speedValueEl.textContent = Math.round(displayedSpeed).toString().padStart(2, '0');
-  let elevation = 0;
-  if (travelMode === 'driving') elevation = caveTravelZone === 'surface'
-    ? getSurfaceHeight(playerNormal) + jumpHeight
-    : caveLocalPosition.y + jumpHeight;
-  else if (travelMode === 'walking') {
-    const surfaceHeight = currentWorld === 'mars'
-      ? getSurfaceHeight(footNormal)
-      : currentWorld === 'zephyra'
-        ? getZephyraHeight(footNormal)
-        : getMoonHeight(footNormal);
-    elevation = surfaceHeight + footJumpHeight;
-  }
-  elevationValueEl.textContent = `${elevation >= 0 ? '+' : ''}${elevation.toFixed(1)}`;
+    speedValueEl.textContent = Math.round(displayedSpeed).toString().padStart(2, '0');
+    let elevation = 0;
+    if (travelMode === 'driving') elevation = caveTravelZone === 'surface'
+      ? getSurfaceHeight(playerNormal) + jumpHeight
+      : caveLocalPosition.y + jumpHeight;
+    else if (travelMode === 'walking') {
+      const surfaceHeight = currentWorld === 'mars'
+        ? getSurfaceHeight(footNormal)
+        : currentWorld === 'zephyra'
+          ? getZephyraHeight(footNormal)
+          : getMoonHeight(footNormal);
+      elevation = surfaceHeight + footJumpHeight;
+    }
+    elevationValueEl.textContent = `${elevation >= 0 ? '+' : ''}${elevation.toFixed(1)}`;
 
   if (travelMode === 'hyperbike' && hyperBikeTransit) {
     locationLabelEl.textContent = `HYPERSPEED CORRIDOR · ${hyperBikeTransit.to.toUpperCase()}`;
@@ -7810,8 +9231,12 @@ function animate() {
       : `NIGHTFALL DESCENT · ${Math.round(caveRouteDistance)} / ${Math.round(CAVE_ROUTE_LENGTH)} M`;
     gravityValueEl.textContent = '0.38 G';
     controlsHintEl.textContent = caveTravelZone === 'chamber'
-      ? 'WASD / ARROWS explore · follow glowstone road out · F look back'
-      : 'W/S descend or reverse · A/D keep between glowstones · F look back';
+      ? 'WASD / ARROWS explore · R warp to Mars start · F look back'
+      : 'W/S descend or reverse · R warp to Mars start · F look back';
+  } else if (ufoInteriorActive) {
+    locationLabelEl.textContent = "CAITLIN'S PROJECT ARCHIVE · UFO INTERIOR";
+    gravityValueEl.textContent = '0.38 G';
+    controlsHintEl.textContent = 'SELECT A PROJECT SCREEN TO OPEN IT · E exit crashed UFO';
   } else {
     const locationWorld = travelMode === 'boarded' ? shuttleLocation : travelMode === 'hyperbike' ? hyperBikeLocation : currentWorld;
     locationLabelEl.textContent = locationWorld === 'moon'
@@ -7830,7 +9255,11 @@ function animate() {
           : zephyraCanyonProximity > 0.55 && zephyraCanyonProximity >= zephyraGroveProximity && zephyraCanyonProximity >= zephyraStormProximity
           ? 'ION GLASS CANYON · ZEPHYRA'
           : zephyraStormProximity > 0.55 ? 'RESONANCE SPIRES · ZEPHYRA' : 'ZEPHYRA SURFACE · ELECTRIC HORIZON'
-        : marsImpactBasinProximity > 0.55 && marsImpactBasinProximity >= marsYardangProximity && marsImpactBasinProximity >= marsEscarpmentProximity
+        : activeDrivingCourse
+          ? `${activeDrivingCourse.name} · MARS MOTORSPORT`
+          : travelMode === 'walking' && currentWorld === 'mars' && arcDistanceForWorld('mars', footNormal, GARAGE_NORMAL) < 26
+          ? 'ARES MOTOR CAVERN · VEHICLE GARAGE'
+          : marsImpactBasinProximity > 0.55 && marsImpactBasinProximity >= marsYardangProximity && marsImpactBasinProximity >= marsEscarpmentProximity
           ? 'DAEDALIA IMPACT BASIN · MARS'
           : marsYardangProximity > 0.55 && marsYardangProximity >= marsImpactBasinProximity && marsYardangProximity >= marsEscarpmentProximity
             ? 'MEDUSAE YARDANGS · MARS'
@@ -7845,7 +9274,7 @@ function animate() {
         ? `${THREE.MathUtils.lerp(0.52, 0.13, zephyraFluxProximity).toFixed(2)} G`
         : '0.38 G';
     controlsHintEl.textContent = travelMode === 'driving'
-      ? 'WASD / ARROWS drive · HOLD SPACE hover lift · E exit rover · F look back'
+      ? `WASD / ARROWS drive ${activeVehicle?.label || 'vehicle'} · HOLD SPACE thrusters · E exit · F look back`
       : travelMode === 'walking'
         ? moonCommandInterior > 0.35
           ? 'WASD / ARROWS explore command · E operate consoles · F look back'
@@ -7868,8 +9297,15 @@ function animate() {
   }
   shuttleStatusEl.classList.toggle('nearby', isPlayerNearLandedShuttle());
 
-  updateTravelPrompt();
+    updateTravelPrompt();
+  }
 
   renderer.render(scene, camera);
+  updatePerformanceDebug(rawDt);
+  if (!loadingComplete) {
+    renderedStartupFrames += 1;
+    setLoadingStage(92 + renderedStartupFrames * 2, renderedStartupFrames < 3 ? 'STABILIZING FIRST TRANSMISSION' : 'EXPEDITION READY');
+    if (renderedStartupFrames >= 3) finishLoadingScreen();
+  }
 }
 animate();

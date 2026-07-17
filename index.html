@@ -6,6 +6,23 @@
     <title>Mars Alien Explorer</title>
   </head>
   <body>
+    <div id="loading-screen" role="status" aria-live="polite" aria-label="Loading Mars Alien Explorer">
+      <div class="loading-space" aria-hidden="true">
+        <i class="loading-orbit orbit-one"></i>
+        <i class="loading-orbit orbit-two"></i>
+        <span class="loading-planet"></span>
+        <span class="loading-rover">&#9670;</span>
+      </div>
+      <p class="loading-kicker">ARES EXPLORATION NETWORK</p>
+      <h1>MARS ALIEN EXPLORER</h1>
+      <div class="loading-meter" aria-hidden="true"><i id="loading-progress"></i></div>
+      <div class="loading-readout">
+        <span id="loading-status">WAKING ROVER SYSTEMS</span>
+        <strong id="loading-percent">08%</strong>
+      </div>
+      <p class="loading-tip">LOW GRAVITY · DEEP CAVES · STRANGE FRIENDS</p>
+    </div>
+
     <div id="app"></div>
 
     <div id="hud">
@@ -40,9 +57,12 @@
 
     <div id="banner"></div>
     <div id="interaction-prompt" aria-live="polite"></div>
+    <button id="cave-warp-btn" type="button" aria-label="Warp the rover back to the Mars starting spot" aria-hidden="true">
+      <span>R</span> WARP TO MARS START
+    </button>
 
     <div id="portfolio-panel">
-      <h2 id="portfolio-title">Caitlin Bax &mdash; Projects</h2>
+      <h2 id="portfolio-title">Caitlin's Project Archive <small>LIVE SCREENS &middot; E TO EXIT SHIP</small></h2>
       <div id="portfolio-grid"></div>
     </div>
 
