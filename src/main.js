@@ -27,14 +27,14 @@ window.addEventListener('resize', () => {
 
 /* ---------- hub layout & terrain shaping ---------- */
 
-const MAP_SIZE = 220;
+const MAP_SIZE = 140;
 const MAP_HALF = MAP_SIZE / 2 - 6;
 
 const HUBS = [
-  { key: 'outpost', name: "Caitlin's Projects", x: 75, z: -75, color: 0x6fb8ff, trigger: 15 },
-  { key: 'cavern', name: 'Crystal Cavern', x: -75, z: -75, color: 0xb266ff, trigger: 15 },
-  { key: 'ruins', name: 'Ancient Ruins', x: 75, z: 75, color: 0xe0a35a, trigger: 15 },
-  { key: 'crash', name: 'Crash Site', x: -75, z: 75, color: 0xff6a4a, trigger: 15 },
+  { key: 'outpost', name: "Caitlin's Projects", x: 35, z: -35, color: 0x6fb8ff, trigger: 15 },
+  { key: 'cavern', name: 'Contact Info', x: -35, z: -35, color: 0xb266ff, trigger: 15 },
+  { key: 'ruins', name: 'Ancient Ruins', x: 35, z: 35, color: 0xe0a35a, trigger: 15 },
+  { key: 'crash', name: 'Crash Site', x: -35, z: 35, color: 0xff6a4a, trigger: 15 },
 ];
 
 const FLATTEN_ZONES = [{ x: 0, z: 0, r0: 12, r1: 24 }, ...HUBS.map((h) => ({ x: h.x, z: h.z, r0: 13, r1: 24 }))];
@@ -475,59 +475,139 @@ function buildAlien() {
   const alien = new THREE.Group();
   const skinColor = 0x8fd400;
 
-  const hipY = 0.95;
+  const limbColor = 0x6ea600;
+  const jointColor = 0x5d9200;
+  const hipY = 1.0;
+  const thighLen = 0.5;
+  const shinLen = 0.5;
+
   const legs = [];
-  [-0.22, 0.22].forEach((x) => {
-    const legGroup = new THREE.Group();
-    legGroup.position.set(x, hipY, 0);
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, 0.95, 8), stdMat(0x6ea600));
-    leg.position.y = -0.475;
-    legGroup.add(leg);
-    alien.add(legGroup);
-    legs.push(legGroup);
+  [-0.24, 0.24].forEach((x) => {
+    const thigh = new THREE.Group();
+    thigh.position.set(x, hipY, 0);
+    thigh.add(new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), stdMat(jointColor)));
+
+    const thighMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, thighLen, 10), stdMat(limbColor));
+    thighMesh.position.y = -thighLen / 2;
+    thigh.add(thighMesh);
+
+    const shin = new THREE.Group();
+    shin.position.y = -thighLen;
+    shin.add(new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), stdMat(jointColor)));
+
+    const shinMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.08, shinLen, 10), stdMat(limbColor));
+    shinMesh.position.y = -shinLen / 2;
+    shin.add(shinMesh);
+
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), stdMat(limbColor, { roughness: 0.6 }));
+    foot.scale.set(1.1, 0.55, 1.6);
+    foot.position.set(0, -shinLen, -0.09);
+    shin.add(foot);
+
+    thigh.add(shin);
+    alien.add(thigh);
+    legs.push({ thigh, shin });
   });
 
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 0.7, 4, 12), stdMat(skinColor, { roughness: 0.55 }));
-  body.position.y = 1.8;
+  body.position.y = 1.85;
+  body.scale.set(1, 1, 0.92);
   alien.add(body);
 
-  const shoulderY = 1.75;
+  const shoulderY = 1.8;
+  const upperLen = 0.4;
+  const foreLen = 0.4;
   const arms = [];
   [-0.62, 0.62].forEach((x, i) => {
-    const armGroup = new THREE.Group();
-    armGroup.position.set(x, shoulderY, 0);
-    armGroup.rotation.z = i === 0 ? 0.2 : -0.2;
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.75, 8), stdMat(0x6ea600));
-    arm.position.y = -0.375;
-    armGroup.add(arm);
-    alien.add(armGroup);
-    arms.push(armGroup);
+    const upper = new THREE.Group();
+    upper.position.set(x, shoulderY, 0);
+    upper.rotation.z = i === 0 ? -0.15 : 0.15;
+    upper.add(new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), stdMat(jointColor)));
+
+    const upperMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, upperLen, 10), stdMat(limbColor));
+    upperMesh.position.y = -upperLen / 2;
+    upper.add(upperMesh);
+
+    const fore = new THREE.Group();
+    fore.position.y = -upperLen;
+    fore.add(new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), stdMat(jointColor)));
+
+    const foreMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.075, foreLen, 10), stdMat(limbColor));
+    foreMesh.position.y = -foreLen / 2;
+    fore.add(foreMesh);
+
+    const hand = new THREE.Group();
+    hand.position.y = -foreLen;
+    const palm = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), stdMat(limbColor));
+    palm.scale.set(1, 0.8, 0.6);
+    hand.add(palm);
+    [-0.05, 0, 0.05].forEach((fx) => {
+      const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.015, 0.16, 6), stdMat(limbColor));
+      finger.position.set(fx, -0.13, -0.02);
+      hand.add(finger);
+    });
+    fore.add(hand);
+
+    upper.add(fore);
+    alien.add(upper);
+    arms.push({ upper, fore });
   });
 
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.5, 10), stdMat(0x6ea600));
   neck.position.y = 2.9;
   alien.add(neck);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.95, 24, 20), stdMat(0xbdf24a, { roughness: 0.45 }));
+  const headGeo = new THREE.SphereGeometry(0.95, 24, 20);
+  const headPos = headGeo.attributes.position;
+  for (let i = 0; i < headPos.count; i++) {
+    const hx = headPos.getX(i);
+    const hy = headPos.getY(i);
+    const hz = headPos.getZ(i);
+    if (hy < 0) {
+      const taper = 1 + (hy / 0.95) * 0.4;
+      headPos.setX(i, hx * taper);
+      headPos.setZ(i, hz * taper);
+    }
+  }
+  headPos.needsUpdate = true;
+  headGeo.computeVertexNormals();
+  const head = new THREE.Mesh(headGeo, stdMat(0xbdf24a, { roughness: 0.45 }));
   head.position.y = 3.85;
   head.scale.set(1.05, 1.2, 0.95);
   alien.add(head);
 
-  [-0.42, 0.42].forEach((x, i) => {
-    const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.4, 24, 20),
-      stdMat(0x060606, { emissive: 0x123a3a, emissiveIntensity: 0.2, roughness: 0.12, metalness: 0.2 })
-    );
-    eye.scale.set(1.3, 0.75, 0.5);
-    eye.rotation.y = i === 0 ? 0.35 : -0.35;
-    eye.position.set(x, 3.82, -0.6);
+  const eyeW = 0.34;
+  const eyeH = 0.22;
+  const eyeShape = new THREE.Shape();
+  eyeShape.moveTo(-eyeW, 0);
+  eyeShape.quadraticCurveTo(0, eyeH, eyeW, 0);
+  eyeShape.quadraticCurveTo(0, -eyeH, -eyeW, 0);
+  const eyeGeo = new THREE.ExtrudeGeometry(eyeShape, {
+    depth: 0.09,
+    bevelEnabled: true,
+    bevelThickness: 0.02,
+    bevelSize: 0.02,
+    bevelSegments: 3,
+    curveSegments: 20,
+  });
+  eyeGeo.translate(0, 0, -0.045);
+  eyeGeo.rotateY(Math.PI);
+
+  [-0.38, 0.38].forEach((x, i) => {
+    const eye = new THREE.Mesh(eyeGeo, stdMat(0x050505, { emissive: 0x123a3a, emissiveIntensity: 0.15, roughness: 0.15, metalness: 0.2 }));
+    eye.position.set(x, 3.82, -0.72);
+    eye.rotation.z = i === 0 ? -0.35 : 0.35;
     alien.add(eye);
+
+    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), stdMat(0xeaffff, { emissive: 0xeaffff, emissiveIntensity: 0.6 }));
+    glint.position.set(x + (i === 0 ? -0.08 : 0.08), 3.9, -0.78);
+    alien.add(glint);
   });
 
-  const mouthGeo = new THREE.TorusGeometry(0.22, 0.045, 8, 20, Math.PI);
+  const mouthGeo = new THREE.TorusGeometry(0.24, 0.05, 8, 20, Math.PI);
   mouthGeo.rotateZ(Math.PI);
   const mouth = new THREE.Mesh(mouthGeo, stdMat(0x1a1410, { roughness: 0.4 }));
-  mouth.position.set(0, 3.55, -0.72);
+  mouth.position.set(0, 3.62, -0.97);
   alien.add(mouth);
 
   alien.position.set(0, getTerrainHeight(0, 0), 0);
@@ -615,6 +695,24 @@ PROJECTS.forEach((p) => {
 const PORTFOLIO_HUB_KEY = 'outpost';
 const PORTFOLIO_REVEAL_RADIUS = 22;
 
+const CONTACT_LINKS = [
+  { label: 'Email', desc: 'baxc1722@gmail.com', url: 'mailto:baxc1722@gmail.com' },
+  { label: 'GitHub', desc: 'github.com/HuskyWusky158', url: 'https://github.com/HuskyWusky158' },
+  { label: 'LinkedIn', desc: 'linkedin.com/in/caitlinbax325', url: 'https://www.linkedin.com/in/caitlinbax325/' },
+  { label: 'Resume', desc: 'Download PDF', url: 'https://caitlin-portfolio-weld.vercel.app/resume.pdf' },
+];
+
+const contactPanelEl = document.getElementById('contact-panel');
+const contactGridEl = document.getElementById('contact-grid');
+CONTACT_LINKS.forEach((c) => {
+  const card = document.createElement('div');
+  card.className = 'project-card contact-card';
+  card.innerHTML = `<h3>${c.label}</h3><p>${c.desc}</p><a href="${c.url}" target="_blank" rel="noopener noreferrer">Open</a>`;
+  contactGridEl.appendChild(card);
+});
+const CONTACT_HUB_KEY = 'cavern';
+const CONTACT_REVEAL_RADIUS = 22;
+
 /* ---------- HUD ---------- */
 
 const hubListEl = document.getElementById('hub-list');
@@ -697,13 +795,20 @@ function animate() {
   alien.position.y = getTerrainHeight(alien.position.x, alien.position.z);
 
   walkCycle += dt * (moved ? 9 : 0);
-  const legSwing = Math.sin(walkCycle) * 0.5;
-  const targetLeg0 = moved ? legSwing : 0;
-  const targetLeg1 = moved ? -legSwing : 0;
-  legs[0].rotation.x = THREE.MathUtils.lerp(legs[0].rotation.x, targetLeg0, 0.25);
-  legs[1].rotation.x = THREE.MathUtils.lerp(legs[1].rotation.x, targetLeg1, 0.25);
-  arms[0].rotation.x = THREE.MathUtils.lerp(arms[0].rotation.x, moved ? -legSwing * 0.7 : 0, 0.25);
-  arms[1].rotation.x = THREE.MathUtils.lerp(arms[1].rotation.x, moved ? legSwing * 0.7 : 0, 0.25);
+  legs.forEach((leg, i) => {
+    const phase = walkCycle + (i === 0 ? 0 : Math.PI);
+    const thighTarget = moved ? Math.sin(phase) * 0.5 : 0;
+    const kneeTarget = moved ? Math.max(0, Math.sin(phase)) * 0.9 : 0;
+    leg.thigh.rotation.x = THREE.MathUtils.lerp(leg.thigh.rotation.x, thighTarget, 0.25);
+    leg.shin.rotation.x = THREE.MathUtils.lerp(leg.shin.rotation.x, kneeTarget, 0.25);
+  });
+  arms.forEach((arm, i) => {
+    const phase = walkCycle + (i === 0 ? Math.PI : 0);
+    const upperTarget = moved ? Math.sin(phase) * 0.35 : 0;
+    const elbowTarget = moved ? Math.max(0, -Math.sin(phase)) * 0.5 : 0;
+    arm.upper.rotation.x = THREE.MathUtils.lerp(arm.upper.rotation.x, upperTarget, 0.25);
+    arm.fore.rotation.x = THREE.MathUtils.lerp(arm.fore.rotation.x, elbowTarget, 0.25);
+  });
 
   for (const hub of HUBS) {
     if (!hub.discovered && Math.hypot(alien.position.x - hub.x, alien.position.z - hub.z) < hub.trigger) {
@@ -714,6 +819,10 @@ function animate() {
   const portfolioHub = HUBS.find((h) => h.key === PORTFOLIO_HUB_KEY);
   const nearPortfolio = Math.hypot(alien.position.x - portfolioHub.x, alien.position.z - portfolioHub.z) < PORTFOLIO_REVEAL_RADIUS;
   portfolioPanelEl.classList.toggle('show', nearPortfolio);
+
+  const contactHub = HUBS.find((h) => h.key === CONTACT_HUB_KEY);
+  const nearContact = Math.hypot(alien.position.x - contactHub.x, alien.position.z - contactHub.z) < CONTACT_REVEAL_RADIUS;
+  contactPanelEl.classList.toggle('show', nearContact);
 
   const cavern = hubRuntime.cavern;
   cavern.crystalMaterials.forEach((mat, i) => {
