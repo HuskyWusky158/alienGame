@@ -1,8 +1,10 @@
+import { createProceduralRockGeometry, createProceduralRockMaterial } from './proceduralRocks.js';
+
 /**
  * Build a four-bay garage carved into a Martian rock face.
  *
- * This module intentionally does not import Three.js. Passing the app's THREE
- * namespace avoids bundling a second copy and keeps it compatible with r150.
+ * Passing the app's THREE namespace keeps every generated mesh compatible
+ * with the renderer while the shared geology helper supplies the rock skin.
  */
 export function buildRockGarage({
   THREE,
@@ -78,7 +80,17 @@ export function buildRockGarage({
     return new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
   };
 
-  const rockMaterial = material(0xffffff, { roughness: 1, metalness: 0, flatShading: true });
+  const rockMaterial = material(0xffffff, { roughness: 1, metalness: 0 });
+  const exposedRockMaterial = createProceduralRockMaterial({
+    THREE,
+    color: 0xffffff,
+    seed: 0x6a4a9e,
+    roughness: 1,
+    bumpScale: 0.06,
+    textureSize: isTouchDevice ? 64 : 96,
+    dustColor: 0xbb7048,
+    dustStrength: 0.22,
+  });
   const interiorMaterial = material(0x241a19, {
     emissive: 0x0b0605,
     emissiveIntensity: 0.18,
@@ -110,7 +122,9 @@ export function buildRockGarage({
   const garageWidth = baySpacing * bayCount;
   const dummy = new THREE.Object3D();
 
+  const structuralBlocks = [];
   const rockBlocks = [];
+  const addStructuralRock = (x, y, z, sx, sy, sz, color) => structuralBlocks.push({ x, y, z, sx, sy, sz, color });
   const addRock = (x, y, z, sx, sy, sz, color) => rockBlocks.push({ x, y, z, sx, sy, sz, color });
 
   // Five deep piers and one continuous ceiling leave four clear drive-through
@@ -118,9 +132,9 @@ export function buildRockGarage({
   // approaches the garage.
   for (let boundary = 0; boundary <= bayCount; boundary++) {
     const x = (boundary - bayCount / 2) * baySpacing;
-    addRock(x, 2.45, 0.25, boundary === 0 || boundary === bayCount ? 1.5 : 0.78, 4.9, 8.9, 0x623a2b);
+    addStructuralRock(x, 2.45, 0.25, boundary === 0 || boundary === bayCount ? 1.5 : 0.78, 4.9, 8.9, 0x623a2b);
   }
-  addRock(0, 5.45, 0.25, garageWidth + 0.32, 1.18, 9.25, 0x68402f);
+  addStructuralRock(0, 5.45, 0.25, garageWidth + 0.32, 1.18, 9.25, 0x68402f);
 
   // Irregular horizontal courses and battered side banks sell the excavation.
   const courseColors = [0x8a5033, 0x6f3e2c, 0x9a5c3b, 0x583128];
@@ -155,8 +169,33 @@ export function buildRockGarage({
     }
   });
 
-  const rockShell = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), rockMaterial, rockBlocks.length);
-  rockShell.name = 'Garage carved sandstone shell and strata';
+  const structuralShell = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), rockMaterial, structuralBlocks.length);
+  structuralShell.name = 'Hidden garage clearance-preserving support shell';
+  structuralBlocks.forEach((block, index) => {
+    dummy.position.set(block.x, block.y, block.z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(block.sx, block.sy, block.sz);
+    dummy.updateMatrix();
+    structuralShell.setMatrixAt(index, dummy.matrix);
+    structuralShell.setColorAt(index, new THREE.Color(block.color));
+  });
+  structuralShell.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  structuralShell.instanceMatrix.needsUpdate = true;
+  if (structuralShell.instanceColor) structuralShell.instanceColor.needsUpdate = true;
+  root.add(structuralShell);
+
+  const rockShell = new THREE.InstancedMesh(
+    createProceduralRockGeometry({
+      THREE,
+      seed: 0x6a4a9e,
+      detail: isTouchDevice ? 1 : 2,
+      archetype: 'sedimentary',
+      ruggedness: 0.78,
+    }),
+    exposedRockMaterial,
+    rockBlocks.length
+  );
+  rockShell.name = 'Garage naturally weathered sandstone courses and side banks';
   rockBlocks.forEach((block, index) => {
     dummy.position.set(block.x, block.y, block.z);
     dummy.rotation.set(0, 0, 0);
@@ -315,7 +354,7 @@ export function buildRockGarage({
     lights,
     signs,
     garageSign,
-    meshes: { rockShell, interiorWalls, floor, pads, padRings, emissiveStrips: strips },
+    meshes: { rockShell, structuralShell, interiorWalls, floor, pads, padRings, emissiveStrips: strips },
     materials: {
       rockMaterial,
       interiorMaterial,
