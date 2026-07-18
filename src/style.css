@@ -393,33 +393,77 @@ canvas {
   position: fixed;
   top: 113px;
   right: 22px;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 179, 91, 0.3);
-  border-radius: 5px;
+  width: 214px;
+  padding: 9px 11px 8px;
+  border: 1px solid rgba(255, 179, 91, 0.42);
+  border-radius: 7px;
   color: #ffd7a1;
-  background: rgba(34, 18, 8, 0.56);
-  backdrop-filter: blur(6px);
+  background: linear-gradient(135deg, rgba(42, 20, 8, 0.84), rgba(16, 24, 37, 0.8));
+  box-shadow: 0 0 22px rgba(255, 149, 68, 0.08);
+  backdrop-filter: blur(8px);
   font-size: 8px;
   font-weight: 850;
   letter-spacing: 1.15px;
   pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-7px);
-  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0s linear 0.22s;
-  z-index: 11;
-}
-
-#shuttle-status.nearby {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
-  transition-delay: 0s;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  z-index: 11;
+}
+
+.shuttle-countdown-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: rgba(255, 211, 157, 0.62);
+  font-size: 6px;
+  letter-spacing: 1.5px;
+}
+
+.shuttle-countdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 5px;
+}
+
+#shuttle-status-text {
+  overflow: hidden;
+  color: #ffe0b8;
+  font-size: 8px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#shuttle-countdown-value {
+  min-width: 30px;
+  color: #fff5df;
+  font: 900 24px/0.9 "Arial Narrow", "Roboto Condensed", sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  text-align: right;
+  text-shadow: 0 0 12px rgba(255, 173, 91, 0.3);
+}
+
+.shuttle-countdown-row small {
+  color: rgba(255, 218, 174, 0.64);
+  font-size: 6px;
+  letter-spacing: 0.8px;
 }
 
 #shuttle-status.urgent {
   border-color: rgba(255, 117, 79, 0.72);
-  box-shadow: 0 0 16px rgba(255, 91, 45, 0.18);
+  box-shadow: 0 0 20px rgba(255, 91, 45, 0.24);
+}
+
+#shuttle-status.urgent #shuttle-countdown-value {
+  color: #ff9a76;
+  animation: shuttle-countdown-pulse 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes shuttle-countdown-pulse {
+  to { opacity: 0.58; text-shadow: 0 0 18px rgba(255, 91, 45, 0.72); }
 }
 
 #moon-friend-status {
@@ -825,8 +869,14 @@ body.touch-device #controls-hint {
   #shuttle-status {
     top: 95px;
     right: 10px;
+    width: min(204px, calc(100vw - 20px));
     padding: 6px 8px;
     font-size: 7px;
+  }
+
+  #shuttle-countdown-value {
+    min-width: 27px;
+    font-size: 21px;
   }
 
   #moon-friend-status {

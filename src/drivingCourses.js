@@ -127,26 +127,6 @@ export function buildDrivingCourses({
 
   const definitions = [
     {
-      id: 'ridgeflow',
-      name: 'RIDGEFLOW CIRCUIT',
-      subtitle: 'FAST FLOW · LONG BANKS',
-      center: [76, 48],
-      radiusX: 48,
-      radiusZ: 30,
-      width: 2.7,
-      waves: 3,
-      waveAmount: 0.09,
-      phase: 0.45,
-      roadColor: 0x6f2b20,
-      centerColor: 0xb54e2d,
-      edgeColor: 0xffc45d,
-      accentColor: 0xffb340,
-      checkpointCount: 12,
-      boostIndices: [2, 7, 10],
-      rampIndices: [4, 9],
-      recommended: 'ROCKHOPPER',
-    },
-    {
       id: 'cratercoil',
       name: 'CRATER COIL',
       subtitle: 'TECHNICAL · TIGHT SLALOM',

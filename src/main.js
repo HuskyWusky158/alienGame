@@ -82,7 +82,7 @@ const GARAGE_OUTWARD_HEADING = START_NORMAL.clone()
   .addScaledVector(GARAGE_NORMAL, -START_NORMAL.dot(GARAGE_NORMAL))
   .normalize();
 const MARS_COURSE_CLEAR_ZONES = [
-  { normal: normalFromSurfaceCoords(76, 48), radius: 58 },
+  { normal: normalFromSurfaceCoords(170, 145), radius: 58 },
   { normal: normalFromSurfaceCoords(-128, -2), radius: 48 },
 ];
 const MOON_COLD_TRAP_DIRECTION = UP.clone()
@@ -199,7 +199,7 @@ const HUBS = [
   // Close to the starting region, but isolated from the driving courses.
   { key: 'outpost', name: "Caitlin's Projects", x: 62, z: -42, color: 0x6fb8ff, trigger: 19 },
   { key: 'cavern', name: 'Crystal Outcrop', x: -144, z: -144, color: 0xb266ff, trigger: 13, hiddenWaypoint: true },
-  { key: 'planetarium', name: 'Xenobiology Globe', x: 100, z: 112, color: 0x78dfff, trigger: 22 },
+  { key: 'planetarium', name: 'Xenobiology Globe', x: 100, z: 112, color: 0x78dfff, trigger: 30 },
   { key: 'crash', name: 'Crash Site', x: -92, z: 94, color: 0xff6a4a, trigger: 13 },
   { key: 'nightfall', name: 'Crystal Cavern', x: -52, z: -42, color: 0x62e6bd, trigger: 19 },
 ];
@@ -256,15 +256,10 @@ const CONTACT_TERMINAL = {
 const ARCHIVE_SCREENS = [...PROJECTS, CONTACT_TERMINAL];
 const PROJECT_SHIP_SCALE = 2.55;
 
-const SPEAKER_STATIONS = [
-  { key: 'ion', name: 'MARS CHILL-HOP', x: -30, z: 2, color: 0x72e6ff },
-  { key: 'redshift', name: 'MARS CHILL-HOP', x: 144, z: -96, color: 0xff806d },
-  { key: 'dust', name: 'MARS CHILL-HOP', x: -156, z: 70, color: 0xc28cff },
-  { key: 'bloom', name: 'MARS CHILL-HOP', x: 48, z: 164, color: 0x78ffc1 },
-  { key: 'echo', name: 'MARS CHILL-HOP', x: 164, z: 56, color: 0xffd36f },
-];
-
 const MARS_PORT = { x: 12, z: -20, name: 'ARES–LUNA TRANSFER' };
+const MARS_OASIS_NORMAL = normalFromSurfaceCoords(170, 145);
+const MARS_OASIS_RADIUS_X = 43;
+const MARS_OASIS_RADIUS_Z = 29;
 const SHUTTLE_BOARD_RADIUS = 11;
 const SHUTTLE_STATUS_RADIUS = 16;
 const SHUTTLE_DOCK_DURATION = 10;
@@ -394,10 +389,6 @@ const CAVE_CHAMBER_CENTER = new THREE.Vector3(0, -47, -207);
 const CAVE_CHAMBER_RADIUS_X = 58;
 const CAVE_CHAMBER_RADIUS_Z = 72;
 const CAVE_TUNNEL_MAX_SPEED = 8.5;
-SPEAKER_STATIONS.forEach((station) => {
-  station.normal = normalFromSurfaceCoords(station.x, station.z);
-  station.hearingRadius = 44;
-});
 MARS_PORT.normal = normalFromSurfaceCoords(MARS_PORT.x, MARS_PORT.z);
 
 function hash3(x, y, z) {
@@ -771,17 +762,17 @@ function baseSurfaceHeight(normal) {
 const FLATTEN_CENTERS = [
   { normal: START_NORMAL, r0: 6, r1: 11 },
   { normal: GARAGE_NORMAL, r0: 15, r1: 23 },
+  { normal: MARS_OASIS_NORMAL, r0: 45, r1: 55 },
   ...HUBS.map((hub) => ({
     normal: hub.normal,
-    r0: hub.key === 'planetarium' ? 15 : 8,
-    r1: hub.key === 'planetarium' ? 22 : 13,
+    r0: hub.key === 'planetarium' ? 27 : 8,
+    r1: hub.key === 'planetarium' ? 38 : 13,
   })),
   ...[-12, 12].map((distance) => ({
     normal: stepWorldNormal(NIGHTFALL_CAVE.normal, NIGHTFALL_CAVE.heading, distance, PLANET_RADIUS),
     r0: 7,
     r1: 10,
   })),
-  ...SPEAKER_STATIONS.map((station) => ({ normal: station.normal, r0: 2.2, r1: 4.2 })),
   { normal: MARS_PORT.normal, r0: 5, r1: 8 },
 ];
 FLATTEN_CENTERS.forEach((zone) => {
@@ -1703,7 +1694,6 @@ function buildRocks() {
     if (MARS_COURSE_CLEAR_ZONES.some((zone) => geodesicDistance(normal, zone.normal) < zone.radius)) continue;
     if (HUBS.some((hub) => geodesicDistance(normal, hub.normal) < 11)) continue;
     if (geodesicDistance(normal, NIGHTFALL_CAVE.normal) < 25) continue;
-    if (SPEAKER_STATIONS.some((station) => geodesicDistance(normal, station.normal) < 4.2)) continue;
     if (geodesicDistance(normal, MARS_PORT.normal) < 8) continue;
     const scale = 0.28 + Math.pow(random(), 2) * 1.75;
     const position = surfaceWorldPosition(normal, scale * 0.3);
@@ -2218,8 +2208,8 @@ function updateMarsImpactBasin(dt, time, activeMarsNormal) {
 
 const marsTrailMeshes = [];
 
-function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 1) {
-  const distance = geodesicDistance(START_NORMAL, hub.normal);
+function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 1, startNormal = START_NORMAL) {
+  const distance = geodesicDistance(startNormal, hub.normal);
   const steps = Math.max(24, Math.ceil(distance / 0.72));
   const vertices = [];
   const colors = [];
@@ -2230,7 +2220,7 @@ function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 
   const variedColor = new THREE.Color();
   for (let index = 0; index <= steps; index++) {
     const routeRatio = index / steps;
-    const normal = slerpNormals(START_NORMAL, hub.normal, routeRatio);
+    const normal = slerpNormals(startNormal, hub.normal, routeRatio);
     forward.copy(hub.normal).addScaledVector(normal, -hub.normal.dot(normal)).normalize();
     right.crossVectors(forward, normal).normalize();
     const edgeNoise = Math.sin(index * 1.73 + hub.x * 0.013) * 0.12 + Math.sin(index * 0.47 + hub.z * 0.021) * 0.08;
@@ -2272,12 +2262,12 @@ function buildTrailRibbon(hub, halfWidth, lateralOffset, lift, color, opacity = 
   return mesh;
 }
 
-function buildDirtPath(hub) {
-  buildTrailRibbon(hub, 1.55, 0, 0.11, 0x7f3824, 0.96);
-  buildTrailRibbon(hub, 0.15, -0.72, 0.145, 0x3f211c, 0.78);
-  buildTrailRibbon(hub, 0.15, 0.72, 0.145, 0x3f211c, 0.78);
+function buildDirtPath(hub, startNormal = START_NORMAL) {
+  buildTrailRibbon(hub, 1.55, 0, 0.11, 0x7f3824, 0.96, startNormal);
+  buildTrailRibbon(hub, 0.15, -0.72, 0.145, 0x3f211c, 0.78, startNormal);
+  buildTrailRibbon(hub, 0.15, 0.72, 0.145, 0x3f211c, 0.78, startNormal);
 }
-SURFACE_WAYPOINT_HUBS.forEach(buildDirtPath);
+SURFACE_WAYPOINT_HUBS.forEach((hub) => buildDirtPath(hub));
 
 function buildTrailheadPlaza() {
   const group = new THREE.Group();
@@ -2296,6 +2286,11 @@ function buildTrailheadPlaza() {
   centerMark.rotation.x = -Math.PI / 2;
   centerMark.position.y = 0.018;
   group.add(centerMark);
+  const shuttleNotice = makeLabelSprite('SHUTTLE ARRIVES IN 10 SECONDS', '#ffe0a8');
+  shuttleNotice.name = 'Central trailhead shuttle arrival notice';
+  shuttleNotice.position.set(0, 4.35, 0);
+  shuttleNotice.scale.set(8.6, 1.22, 1);
+  group.add(shuttleNotice);
   return group;
 }
 
@@ -2327,6 +2322,404 @@ const drivingCourses = buildDrivingCourses({
   isTouchDevice,
 });
 scene.add(drivingCourses.root);
+const xenobiologyTrailHub = HUBS.find((hub) => hub.key === 'planetarium');
+const oasisBranchNormal = slerpNormals(START_NORMAL, xenobiologyTrailHub.normal, 0.72);
+const oasisApproachDirection = oasisBranchNormal.clone()
+  .addScaledVector(MARS_OASIS_NORMAL, -oasisBranchNormal.dot(MARS_OASIS_NORMAL))
+  .normalize();
+const oasisTrailNormal = stepWorldNormal(MARS_OASIS_NORMAL, oasisApproachDirection, 33.5, PLANET_RADIUS);
+const oasisPathTarget = {
+  x: 170,
+  z: 145,
+  normal: oasisTrailNormal,
+};
+buildDirtPath(oasisPathTarget, oasisBranchNormal);
+
+const oasisForward = oasisApproachDirection.clone();
+const oasisRight = oasisForward.clone().cross(MARS_OASIS_NORMAL).normalize();
+const oasisMapDirection = new THREE.Vector3();
+function oasisNormalAt(x, z, target = new THREE.Vector3()) {
+  const distance = Math.hypot(x, z);
+  if (distance < 0.0001) return target.copy(MARS_OASIS_NORMAL);
+  oasisMapDirection.copy(oasisRight).multiplyScalar(x)
+    .addScaledVector(oasisForward, z)
+    .normalize();
+  const angle = distance / PLANET_RADIUS;
+  return target.copy(MARS_OASIS_NORMAL).multiplyScalar(Math.cos(angle))
+    .addScaledVector(oasisMapDirection, Math.sin(angle))
+    .normalize();
+}
+
+function buildOasisLake() {
+  const root = new THREE.Group();
+  root.name = 'Nebula Oasis · living alien lake';
+  const waterSegments = isTouchDevice ? 56 : 80;
+  const waterRings = isTouchDevice ? 4 : 6;
+  const waterPositions = [];
+  const waterIndices = [];
+  const waterNormal = new THREE.Vector3();
+  waterPositions.push(...surfaceWorldPosition(MARS_OASIS_NORMAL, 0.16).toArray());
+  for (let ring = 1; ring <= waterRings; ring++) {
+    const ringRatio = ring / waterRings;
+    for (let segment = 0; segment < waterSegments; segment++) {
+      const angle = (segment / waterSegments) * Math.PI * 2;
+      const edgeWobble = 1 + Math.sin(angle * 5 + 0.4) * 0.018 + Math.sin(angle * 9 - 0.8) * 0.012;
+      const x = Math.cos(angle) * MARS_OASIS_RADIUS_X * ringRatio * edgeWobble;
+      const z = Math.sin(angle) * MARS_OASIS_RADIUS_Z * ringRatio * edgeWobble;
+      oasisNormalAt(x, z, waterNormal);
+      waterPositions.push(...surfaceWorldPosition(waterNormal, 0.16 + Math.sin(angle * 3) * 0.012).toArray());
+    }
+  }
+  for (let segment = 0; segment < waterSegments; segment++) {
+    waterIndices.push(0, 1 + segment, 1 + ((segment + 1) % waterSegments));
+  }
+  for (let ring = 2; ring <= waterRings; ring++) {
+    const innerStart = 1 + (ring - 2) * waterSegments;
+    const outerStart = 1 + (ring - 1) * waterSegments;
+    for (let segment = 0; segment < waterSegments; segment++) {
+      const next = (segment + 1) % waterSegments;
+      waterIndices.push(
+        innerStart + segment,
+        outerStart + segment,
+        innerStart + next,
+        outerStart + segment,
+        outerStart + next,
+        innerStart + next
+      );
+    }
+  }
+  const waterGeometry = new THREE.BufferGeometry();
+  waterGeometry.setAttribute('position', new THREE.Float32BufferAttribute(waterPositions, 3));
+  waterGeometry.setIndex(waterIndices);
+  waterGeometry.computeVertexNormals();
+  waterGeometry.computeBoundingSphere();
+  const waterMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x1bbbd1,
+    emissive: 0x063f62,
+    emissiveIntensity: 0.68,
+    transparent: true,
+    opacity: 0.7,
+    transmission: 0.16,
+    roughness: 0.16,
+    metalness: 0.05,
+    clearcoat: 0.62,
+    clearcoatRoughness: 0.22,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const water = new THREE.Mesh(waterGeometry, waterMaterial);
+  water.name = 'Nebula Oasis spherical water surface';
+  water.renderOrder = 2;
+  root.add(water);
+
+  const shorelinePoints = [];
+  const innerShorelinePoints = [];
+  for (let segment = 0; segment < waterSegments; segment++) {
+    const angle = (segment / waterSegments) * Math.PI * 2;
+    const wobble = 1 + Math.sin(angle * 5 + 0.4) * 0.018 + Math.sin(angle * 9 - 0.8) * 0.012;
+    oasisNormalAt(
+      Math.cos(angle) * MARS_OASIS_RADIUS_X * wobble,
+      Math.sin(angle) * MARS_OASIS_RADIUS_Z * wobble,
+      waterNormal
+    );
+    shorelinePoints.push(surfaceWorldPosition(waterNormal, 0.26));
+    oasisNormalAt(
+      Math.cos(angle) * MARS_OASIS_RADIUS_X * 0.965 * wobble,
+      Math.sin(angle) * MARS_OASIS_RADIUS_Z * 0.965 * wobble,
+      waterNormal
+    );
+    innerShorelinePoints.push(surfaceWorldPosition(waterNormal, 0.24));
+  }
+  const shorelineCurve = new THREE.CatmullRomCurve3(shorelinePoints, true, 'centripetal', 0.5);
+  const shoreline = new THREE.Mesh(
+    new THREE.TubeGeometry(shorelineCurve, waterSegments, 0.42, 7, true),
+    stdMat(0xd39d71, { roughness: 0.86, emissive: 0x4d2217, emissiveIntensity: 0.28 })
+  );
+  shoreline.name = 'Nebula Oasis crystalline shoreline';
+  root.add(shoreline);
+  const foamCurve = new THREE.CatmullRomCurve3(innerShorelinePoints, true, 'centripetal', 0.5);
+  const foam = new THREE.Mesh(
+    new THREE.TubeGeometry(foamCurve, waterSegments, 0.11, 6, true),
+    new THREE.MeshBasicMaterial({ color: 0x9cfff1, transparent: true, opacity: 0.72, toneMapped: false })
+  );
+  root.add(foam);
+
+  const sparkleCount = isTouchDevice ? 55 : 95;
+  const sparklePositions = new Float32Array(sparkleCount * 3);
+  for (let index = 0; index < sparkleCount; index++) {
+    const angle = index * 2.399963;
+    const radius = Math.sqrt(((index * 47) % 101) / 100) * 0.88;
+    const x = Math.cos(angle) * MARS_OASIS_RADIUS_X * radius;
+    const z = Math.sin(angle) * MARS_OASIS_RADIUS_Z * radius;
+    oasisNormalAt(x, z, waterNormal);
+    const position = surfaceWorldPosition(waterNormal, 0.24 + (index % 5) * 0.012);
+    sparklePositions[index * 3] = position.x;
+    sparklePositions[index * 3 + 1] = position.y;
+    sparklePositions[index * 3 + 2] = position.z;
+  }
+  const sparkleGeometry = new THREE.BufferGeometry();
+  sparkleGeometry.setAttribute('position', new THREE.BufferAttribute(sparklePositions, 3));
+  const sparkleMaterial = new THREE.PointsMaterial({
+    color: 0xb8fff5,
+    size: isTouchDevice ? 0.24 : 0.18,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const sparkles = new THREE.Points(sparkleGeometry, sparkleMaterial);
+  root.add(sparkles);
+
+  const trunkGeometry = new THREE.CylinderGeometry(0.18, 0.25, 1.45, 7);
+  const trunkMaterial = stdMat(0x68426f, { roughness: 0.78, emissive: 0x281335, emissiveIntensity: 0.38 });
+  const frondGeometry = new THREE.SphereGeometry(0.72, 10, 7);
+  const frondMaterials = [
+    stdMat(0x55f0b6, { emissive: 0x146d52, emissiveIntensity: 0.64, roughness: 0.54 }),
+    stdMat(0xb26cff, { emissive: 0x4a1a8d, emissiveIntensity: 0.72, roughness: 0.48 }),
+  ];
+  const palmCount = isTouchDevice ? 9 : 14;
+  for (let palmIndex = 0; palmIndex < palmCount; palmIndex++) {
+    const angle = (palmIndex / palmCount) * Math.PI * 2 + Math.sin(palmIndex * 4.7) * 0.08;
+    const radial = 1.12 + (palmIndex % 3) * 0.045;
+    const normal = oasisNormalAt(
+      Math.cos(angle) * MARS_OASIS_RADIUS_X * radial,
+      Math.sin(angle) * MARS_OASIS_RADIUS_Z * radial
+    );
+    const palm = new THREE.Group();
+    palm.name = `Space palm ${palmIndex + 1}`;
+    placeSurfaceGroup(palm, normal, 0.12);
+    palm.rotation.y = angle + palmIndex * 0.37;
+    const bend = Math.sin(palmIndex * 2.1) * 0.48;
+    for (let segment = 0; segment < 5; segment++) {
+      const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+      const progress = segment / 4;
+      trunk.position.set(bend * progress * progress, 0.72 + segment * 1.25, Math.cos(palmIndex) * progress * 0.16);
+      trunk.rotation.z = -bend * 0.07;
+      trunk.scale.setScalar(1 - progress * 0.11);
+      palm.add(trunk);
+    }
+    const crownX = bend;
+    const crownY = 6.45;
+    for (let leafIndex = 0; leafIndex < 8; leafIndex++) {
+      const leafAngle = (leafIndex / 8) * Math.PI * 2 + palmIndex * 0.21;
+      const frond = new THREE.Mesh(frondGeometry, frondMaterials[(leafIndex + palmIndex) % 2]);
+      frond.position.set(crownX + Math.cos(leafAngle) * 1.3, crownY + Math.sin(leafIndex * 1.8) * 0.22, Math.sin(leafAngle) * 1.3);
+      frond.scale.set(0.5, 0.12, 2.25);
+      frond.rotation.y = leafAngle;
+      frond.rotation.z = Math.sin(leafAngle) * 0.28;
+      palm.add(frond);
+    }
+    for (let fruitIndex = 0; fruitIndex < 3; fruitIndex++) {
+      const fruit = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 9, 7),
+        stdMat(fruitIndex % 2 ? 0xff7fcb : 0x77f5ff, { emissive: fruitIndex % 2 ? 0x8f255f : 0x236d8a, emissiveIntensity: 0.9 })
+      );
+      fruit.position.set(crownX + (fruitIndex - 1) * 0.24, crownY - 0.52, 0.1 + Math.sin(fruitIndex * 2.2) * 0.2);
+      palm.add(fruit);
+    }
+    root.add(palm);
+  }
+
+  const flowerCount = isTouchDevice ? 42 : 78;
+  const stemGeometry = new THREE.CylinderGeometry(0.022, 0.034, 0.52, 5);
+  const bloomGeometry = new THREE.DodecahedronGeometry(0.15, 0);
+  const stems = new THREE.InstancedMesh(stemGeometry, stdMat(0x5cffb1, { roughness: 0.62 }), flowerCount);
+  const blooms = new THREE.InstancedMesh(
+    bloomGeometry,
+    stdMat(0xffffff, { emissive: 0x552266, emissiveIntensity: 0.72, roughness: 0.42 }),
+    flowerCount
+  );
+  const flowerDummy = new THREE.Object3D();
+  const flowerColors = [0xff63c8, 0x8c7bff, 0x66ffe1, 0xffd66b, 0xd87cff];
+  for (let flowerIndex = 0; flowerIndex < flowerCount; flowerIndex++) {
+    const angle = flowerIndex * 2.399963 + Math.sin(flowerIndex * 0.91) * 0.16;
+    const radial = 1.03 + (flowerIndex % 7) * 0.027;
+    const normal = oasisNormalAt(
+      Math.cos(angle) * MARS_OASIS_RADIUS_X * radial,
+      Math.sin(angle) * MARS_OASIS_RADIUS_Z * radial
+    );
+    flowerDummy.position.copy(surfaceWorldPosition(normal, 0.34));
+    flowerDummy.quaternion.setFromUnitVectors(UP, normal);
+    flowerDummy.scale.setScalar(0.82 + (flowerIndex % 5) * 0.08);
+    flowerDummy.updateMatrix();
+    stems.setMatrixAt(flowerIndex, flowerDummy.matrix);
+    flowerDummy.position.copy(surfaceWorldPosition(normal, 0.68 + (flowerIndex % 3) * 0.08));
+    flowerDummy.rotation.y = flowerIndex * 1.7;
+    flowerDummy.updateMatrix();
+    blooms.setMatrixAt(flowerIndex, flowerDummy.matrix);
+    blooms.setColorAt(flowerIndex, new THREE.Color(flowerColors[flowerIndex % flowerColors.length]));
+  }
+  stems.instanceMatrix.needsUpdate = true;
+  blooms.instanceMatrix.needsUpdate = true;
+  if (blooms.instanceColor) blooms.instanceColor.needsUpdate = true;
+  stems.name = 'Nebula Oasis flower stems';
+  blooms.name = 'Nebula Oasis luminous flowers';
+  root.add(stems, blooms);
+
+  const swimmers = [];
+  const swimmerColors = [0xff6dc6, 0x7effdd, 0x9c7bff, 0xffc65c, 0x5bd9ff, 0xff7a68];
+  for (let swimmerIndex = 0; swimmerIndex < 6; swimmerIndex++) {
+    const swimmer = new THREE.Group();
+    swimmer.name = swimmerIndex % 3 === 2 ? 'Crystalline lake ray' : 'Nebula lake swimmer';
+    const color = swimmerColors[swimmerIndex];
+    const accent = swimmerColors[(swimmerIndex + 2) % swimmerColors.length];
+    const bodyMaterial = stdMat(color, { emissive: color, emissiveIntensity: 0.72, roughness: 0.34 });
+    const accentMaterial = stdMat(accent, { emissive: accent, emissiveIntensity: 0.92, roughness: 0.28 });
+    const wings = [];
+    let tail;
+    if (swimmerIndex % 3 === 2) {
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.72, 14, 10), bodyMaterial);
+      body.scale.set(1.35, 0.18, 0.92);
+      swimmer.add(body);
+      [-1, 1].forEach((side) => {
+        const wing = new THREE.Mesh(new THREE.SphereGeometry(0.65, 12, 8), accentMaterial);
+        wing.position.x = side * 0.72;
+        wing.scale.set(1.18, 0.09, 0.65);
+        swimmer.add(wing);
+        wings.push({ mesh: wing, side });
+      });
+      tail = new THREE.Mesh(new THREE.ConeGeometry(0.09, 1.45, 6), bodyMaterial);
+      tail.position.z = 1.15;
+      tail.rotation.x = Math.PI / 2;
+      swimmer.add(tail);
+    } else {
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 11), bodyMaterial);
+      body.scale.set(0.62, 0.48, 1.35);
+      swimmer.add(body);
+      tail = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.82, 5), accentMaterial);
+      tail.position.z = 0.92;
+      tail.rotation.x = -Math.PI / 2;
+      swimmer.add(tail);
+      [-1, 1].forEach((side) => {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), stdMat(0x07121a, { roughness: 0.5 }));
+        eye.position.set(side * 0.2, 0.12, -0.58);
+        swimmer.add(eye);
+      });
+    }
+    root.add(swimmer);
+    swimmers.push({
+      root: swimmer,
+      tail,
+      wings,
+      angle: (swimmerIndex / 6) * Math.PI * 2,
+      speed: 0.16 + swimmerIndex * 0.022,
+      radiusX: MARS_OASIS_RADIUS_X * (0.3 + (swimmerIndex % 3) * 0.16),
+      radiusZ: MARS_OASIS_RADIUS_Z * (0.36 + (swimmerIndex % 2) * 0.2),
+      phase: swimmerIndex * 1.31,
+      normal: new THREE.Vector3(),
+      nextNormal: new THREE.Vector3(),
+      heading: new THREE.Vector3(),
+    });
+  }
+
+  const butterflies = [];
+  const butterflyCount = isTouchDevice ? 8 : 14;
+  for (let butterflyIndex = 0; butterflyIndex < butterflyCount; butterflyIndex++) {
+    const butterfly = new THREE.Group();
+    butterfly.name = 'Free-flying space butterfly';
+    butterfly.scale.setScalar(1.45);
+    const bodyMaterial = stdMat(0x25143e, { emissive: 0x6f2ba8, emissiveIntensity: 0.62, roughness: 0.46 });
+    const wingColor = flowerColors[butterflyIndex % flowerColors.length];
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.3, 4, 7), bodyMaterial);
+    body.rotation.x = Math.PI / 2;
+    butterfly.add(body);
+    const wings = [];
+    [-1, 1].forEach((side) => {
+      const wing = new THREE.Mesh(
+        new THREE.SphereGeometry(0.24, 10, 7),
+        new THREE.MeshBasicMaterial({ color: wingColor, transparent: true, opacity: 0.76, depthWrite: false, toneMapped: false })
+      );
+      wing.position.x = side * 0.22;
+      wing.scale.set(1.15, 0.1, 0.78);
+      wing.rotation.z = side * 0.5;
+      butterfly.add(wing);
+      wings.push({ mesh: wing, side });
+    });
+    root.add(butterfly);
+    butterflies.push({
+      root: butterfly,
+      wings,
+      angle: (butterflyIndex / butterflyCount) * Math.PI * 2,
+      speed: 0.12 + (butterflyIndex % 5) * 0.025,
+      radiusX: MARS_OASIS_RADIUS_X * (0.72 + (butterflyIndex % 4) * 0.08),
+      radiusZ: MARS_OASIS_RADIUS_Z * (0.72 + (butterflyIndex % 3) * 0.09),
+      altitude: 2.2 + (butterflyIndex % 5) * 0.62,
+      phase: butterflyIndex * 1.47,
+      normal: new THREE.Vector3(),
+      nextNormal: new THREE.Vector3(),
+      heading: new THREE.Vector3(),
+    });
+  }
+
+  const label = makeLabelSprite('NEBULA OASIS · LIVING LAKE', '#9effe7');
+  label.position.copy(surfaceWorldPosition(MARS_OASIS_NORMAL, 9.2));
+  label.scale.set(10.8, 1.35, 1);
+  root.add(label);
+  scene.add(root);
+  return { root, water, waterMaterial, foam, sparkleMaterial, sparkles, swimmers, butterflies };
+}
+
+const oasisLake = buildOasisLake();
+
+function updateOasisLake(dt, time) {
+  oasisLake.waterMaterial.emissiveIntensity = 0.62 + Math.sin(time * 0.72) * 0.1;
+  oasisLake.waterMaterial.opacity = 0.67 + Math.sin(time * 0.46) * 0.035;
+  oasisLake.foam.material.opacity = 0.58 + Math.sin(time * 1.35) * 0.16;
+  oasisLake.sparkleMaterial.opacity = 0.54 + Math.sin(time * 1.9) * 0.2;
+  oasisLake.sparkleMaterial.size = (isTouchDevice ? 0.24 : 0.18) * (0.88 + Math.sin(time * 1.2) * 0.12);
+
+  oasisLake.swimmers.forEach((swimmer, swimmerIndex) => {
+    swimmer.angle = (swimmer.angle + dt * swimmer.speed) % (Math.PI * 2);
+    const x = Math.cos(swimmer.angle) * swimmer.radiusX;
+    const z = Math.sin(swimmer.angle) * swimmer.radiusZ;
+    const nextAngle = swimmer.angle + 0.025;
+    oasisNormalAt(x, z, swimmer.normal);
+    oasisNormalAt(
+      Math.cos(nextAngle) * swimmer.radiusX,
+      Math.sin(nextAngle) * swimmer.radiusZ,
+      swimmer.nextNormal
+    );
+    swimmer.heading.copy(swimmer.nextNormal)
+      .addScaledVector(swimmer.normal, -swimmer.nextNormal.dot(swimmer.normal))
+      .normalize();
+    const swimLift = 0.3 + Math.sin(time * 1.7 + swimmer.phase) * 0.055;
+    swimmer.root.position.copy(swimmer.normal)
+      .multiplyScalar(PLANET_RADIUS + getSurfaceHeight(swimmer.normal) + swimLift);
+    orientSurfaceRoot(swimmer.root, swimmer.normal, swimmer.heading);
+    swimmer.root.rotation.z += Math.sin(time * 1.45 + swimmer.phase) * 0.002;
+    swimmer.tail.rotation.y = Math.sin(time * 6.4 + swimmer.phase) * 0.38;
+    swimmer.wings.forEach((wing) => {
+      wing.mesh.rotation.z = wing.side * (0.12 + Math.sin(time * 3.2 + swimmerIndex) * 0.13);
+    });
+  });
+
+  oasisLake.butterflies.forEach((butterfly) => {
+    butterfly.angle = (butterfly.angle + dt * butterfly.speed) % (Math.PI * 2);
+    const wobble = Math.sin(time * 0.9 + butterfly.phase) * 2.2;
+    const x = Math.cos(butterfly.angle) * (butterfly.radiusX + wobble);
+    const z = Math.sin(butterfly.angle) * (butterfly.radiusZ + wobble * 0.55);
+    const nextAngle = butterfly.angle + 0.03;
+    oasisNormalAt(x, z, butterfly.normal);
+    oasisNormalAt(
+      Math.cos(nextAngle) * butterfly.radiusX,
+      Math.sin(nextAngle) * butterfly.radiusZ,
+      butterfly.nextNormal
+    );
+    butterfly.heading.copy(butterfly.nextNormal)
+      .addScaledVector(butterfly.normal, -butterfly.nextNormal.dot(butterfly.normal))
+      .normalize();
+    const altitude = butterfly.altitude + Math.sin(time * 2.1 + butterfly.phase) * 0.48;
+    butterfly.root.position.copy(butterfly.normal)
+      .multiplyScalar(PLANET_RADIUS + getSurfaceHeight(butterfly.normal) + altitude);
+    orientSurfaceRoot(butterfly.root, butterfly.normal, butterfly.heading);
+    butterfly.root.rotation.z += Math.sin(time * 1.8 + butterfly.phase) * 0.003;
+    butterfly.wings.forEach((wing) => {
+      wing.mesh.rotation.z = wing.side * (0.3 + Math.sin(time * 17 + butterfly.phase) * 0.28);
+    });
+  });
+}
+
 let drivingCoursePrompt = '';
 let activeDrivingCourse = null;
 
@@ -2450,6 +2843,79 @@ function buildSignposts() {
 const marsSignposts = [];
 buildSignposts();
 
+function buildOasisBranchSign() {
+  const group = new THREE.Group();
+  group.name = 'Wooden OASIS LAKE branch sign';
+  const incomingDirection = xenobiologyTrailHub.normal.clone()
+    .addScaledVector(oasisBranchNormal, -xenobiologyTrailHub.normal.dot(oasisBranchNormal))
+    .normalize();
+  const incomingRight = incomingDirection.clone().cross(oasisBranchNormal).normalize();
+  const oasisDirection = oasisPathTarget.normal.clone()
+    .addScaledVector(oasisBranchNormal, -oasisPathTarget.normal.dot(oasisBranchNormal))
+    .normalize();
+  const oasisSide = oasisDirection.dot(incomingRight) >= 0 ? 1 : -1;
+  const signNormal = stepWorldNormal(oasisBranchNormal, incomingRight, oasisSide * -4.7, PLANET_RADIUS);
+  const priorNormal = slerpNormals(START_NORMAL, xenobiologyTrailHub.normal, 0.68);
+  const signViewDirection = priorNormal.clone()
+    .addScaledVector(signNormal, -priorNormal.dot(signNormal))
+    .normalize();
+  const boardRight = signNormal.clone().cross(signViewDirection).normalize();
+  const oasisDirectionAtSign = oasisPathTarget.normal.clone()
+    .addScaledVector(signNormal, -oasisPathTarget.normal.dot(signNormal))
+    .normalize();
+  const arrowSide = oasisDirectionAtSign.dot(boardRight) >= 0 ? 1 : -1;
+
+  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4a2817, roughness: 0.96, flatShading: true });
+  const boardMaterial = new THREE.MeshStandardMaterial({
+    color: 0x92582d,
+    emissive: 0x251107,
+    emissiveIntensity: 0.24,
+    roughness: 0.9,
+    flatShading: true,
+    side: THREE.DoubleSide,
+  });
+  const pole = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.62, 0.28), postMaterial);
+  pole.position.y = 0.8;
+  group.add(pole);
+
+  const boardWidth = 5.4;
+  const arrowHeadLength = 1.02;
+  const halfWidth = boardWidth * 0.5;
+  const arrowShape = new THREE.Shape();
+  arrowShape.moveTo(-halfWidth * arrowSide, -0.5);
+  arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, -0.5);
+  arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, -0.72);
+  arrowShape.lineTo(halfWidth * arrowSide, 0);
+  arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, 0.72);
+  arrowShape.lineTo((halfWidth - arrowHeadLength) * arrowSide, 0.5);
+  arrowShape.lineTo(-halfWidth * arrowSide, 0.5);
+  arrowShape.closePath();
+  const board = new THREE.Mesh(new THREE.ShapeGeometry(arrowShape), boardMaterial);
+  board.position.y = 2.16;
+  group.add(board);
+
+  const letteringWidth = boardWidth - arrowHeadLength - 0.32;
+  const letteringMaterial = new THREE.MeshBasicMaterial({
+    map: makeWoodSignTexture('OASIS LAKE'),
+    transparent: true,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    depthWrite: false,
+  });
+  const letteringCenterX = -arrowHeadLength * 0.48 * arrowSide;
+  [0.022, -0.022].forEach((z, index) => {
+    const lettering = new THREE.Mesh(new THREE.PlaneGeometry(letteringWidth, 0.8), letteringMaterial);
+    lettering.position.set(letteringCenterX, 2.16, z);
+    if (index === 1) lettering.rotation.y = Math.PI;
+    group.add(lettering);
+  });
+
+  placeSurfaceGroup(group, signNormal);
+  group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(boardRight, signNormal, signViewDirection));
+  marsSignposts.push(group);
+}
+buildOasisBranchSign();
+
 /* ---------- hub builders ---------- */
 
 function stdMat(color, opts = {}) {
@@ -2532,14 +2998,16 @@ function buildResearchOutpost(hub) {
   const scorchedHull = stdMat(0x292c2c, { metalness: 0.62, roughness: 0.72, flatShading: true });
   const exposedInterior = stdMat(0x080b0d, { metalness: 0.28, roughness: 0.82 });
   const cockpitGlass = new THREE.MeshPhysicalMaterial({
-    color: 0x173846,
-    emissive: 0x0a3948,
-    emissiveIntensity: 0.52,
+    color: 0x8defff,
+    emissive: 0x0b5268,
+    emissiveIntensity: 0.38,
     transparent: true,
-    opacity: 0.68,
-    transmission: 0.18,
-    roughness: 0.16,
-    metalness: 0.18,
+    opacity: 0.16,
+    transmission: 0.48,
+    thickness: 0.28,
+    roughness: 0.08,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
     depthWrite: false,
   });
 
@@ -2576,7 +3044,7 @@ function buildResearchOutpost(hub) {
   saucer.position.set(-0.45, 0.72, 0.15);
   // Local +X is the broken hatch and recovery-ramp side. Aim it directly at
   // the incoming dirt trail so players naturally walk into the entrance.
-  saucer.rotation.set(-0.11, entranceYaw, 0.19);
+  saucer.rotation.set(-0.045, entranceYaw, 0.075);
   saucer.scale.setScalar(PROJECT_SHIP_SCALE);
   group.add(saucer);
 
@@ -2591,25 +3059,6 @@ function buildResearchOutpost(hub) {
   rim.position.y = 1.18;
   saucer.add(rim);
 
-  const cockpitBase = new THREE.Mesh(new THREE.CylinderGeometry(2.42, 2.88, 0.52, 32), scorchedHull);
-  cockpitBase.position.y = 2.03;
-  saucer.add(cockpitBase);
-  const cockpit = new THREE.Mesh(
-    new THREE.SphereGeometry(2.32, 32, 18, 0, Math.PI * 2, 0, Math.PI / 2),
-    cockpitGlass
-  );
-  cockpit.position.y = 2.23;
-  cockpit.scale.y = 0.78;
-  saucer.add(cockpit);
-
-  const cockpitFrameMaterial = stdMat(0x20292e, { metalness: 0.86, roughness: 0.28 });
-  [-0.82, 0.24, 1.08].forEach((rotation, index) => {
-    const crackFrame = new THREE.Mesh(new THREE.BoxGeometry(0.07, 2.2 - index * 0.25, 0.055), cockpitFrameMaterial);
-    crackFrame.position.set(Math.sin(rotation) * 1.42, 3.28, Math.cos(rotation) * 1.42);
-    crackFrame.rotation.set(0.48, rotation, -0.22 + index * 0.19);
-    saucer.add(crackFrame);
-  });
-
   for (let i = 0; i < 14; i++) {
     if (i === 2 || i === 3) continue;
     const angle = (i / 14) * Math.PI * 2;
@@ -2622,7 +3071,7 @@ function buildResearchOutpost(hub) {
 
   const breach = new THREE.Mesh(new THREE.SphereGeometry(1.18, 9, 7), exposedInterior);
   breach.position.set(4.25, 1.24, 0);
-  breach.scale.set(0.58, 1.02, 1.25);
+  breach.scale.set(0.76, 1.28, 1.62);
   saucer.add(breach);
   const breachGlow = new THREE.Mesh(
     new THREE.CircleGeometry(0.78, 18),
@@ -2716,65 +3165,102 @@ function buildResearchOutpost(hub) {
   interiorLight.position.set(5.25, 1.5, 0);
   saucer.add(interiorLight);
 
-  const rampLabel = makeLabelSprite('WALK UP RAMP · E ENTER PROJECT ARCHIVE', '#c8f8ff');
+  const rampLabel = makeLabelSprite('OPEN HATCH · WALK INSIDE', '#c8f8ff');
   rampLabel.position.set(6.35, 2.65, 0);
-  rampLabel.scale.set(8.2, 1.06, 1);
+  rampLabel.scale.set(3.2, 0.44, 1);
   saucer.add(rampLabel);
 
   const interiorGallery = new THREE.Group();
   interiorGallery.name = "Caitlin's project archive · crashed UFO interior";
-  interiorGallery.position.set(0, -18, 0);
-  interiorGallery.visible = false;
+  const galleryYaw = Math.atan2(trailApproachLocal.x, trailApproachLocal.z);
+  interiorGallery.position.set(0, 2.9, 0);
+  interiorGallery.rotation.y = galleryYaw;
+  interiorGallery.visible = true;
   group.add(interiorGallery);
 
   const cabinFloor = new THREE.Mesh(
-    new THREE.CylinderGeometry(8.2, 8.2, 0.28, 36),
+    new THREE.CylinderGeometry(11.72, 11.92, 0.4, 52),
     stdMat(0x111a22, { metalness: 0.78, roughness: 0.38, emissive: 0x07141d, emissiveIntensity: 0.46 })
   );
   cabinFloor.position.y = 0;
   interiorGallery.add(cabinFloor);
-  const cabinWall = new THREE.Mesh(
-    new THREE.CylinderGeometry(8.25, 8.25, 5.8, 36, 1, true),
-    new THREE.MeshStandardMaterial({
-      color: 0x17252d,
-      emissive: 0x061821,
-      emissiveIntensity: 0.58,
-      metalness: 0.72,
-      roughness: 0.42,
-      side: THREE.BackSide,
-    })
+  const canopyRadius = 12.28;
+  const canopyVerticalScale = 0.79;
+  const canopyGap = 0.5;
+  const glassCanopy = new THREE.Mesh(
+    new THREE.SphereGeometry(
+      canopyRadius,
+      64,
+      30,
+      Math.PI / 2 + canopyGap / 2,
+      Math.PI * 2 - canopyGap,
+      0,
+      Math.PI / 2
+    ),
+    cockpitGlass
   );
-  cabinWall.position.y = 2.75;
-  interiorGallery.add(cabinWall);
-  const ceiling = new THREE.Mesh(
-    new THREE.CylinderGeometry(8.2, 8.2, 0.22, 36),
-    stdMat(0x0b1218, { metalness: 0.82, roughness: 0.42, emissive: 0x07131a, emissiveIntensity: 0.35 })
+  glassCanopy.position.y = 0.14;
+  glassCanopy.scale.y = canopyVerticalScale;
+  glassCanopy.renderOrder = 5;
+  interiorGallery.add(glassCanopy);
+  const canopyCollar = new THREE.Mesh(
+    new THREE.TorusGeometry(11.94, 0.42, 10, 72),
+    stdMat(0x3b4b52, { metalness: 0.9, roughness: 0.26, emissive: 0x0b303b, emissiveIntensity: 0.5 })
   );
-  ceiling.position.y = 5.7;
-  interiorGallery.add(ceiling);
+  canopyCollar.rotation.x = Math.PI / 2;
+  canopyCollar.position.y = 0.3;
+  interiorGallery.add(canopyCollar);
 
   const ribMaterial = stdMat(0x31444d, { metalness: 0.86, roughness: 0.28, emissive: 0x0b2027, emissiveIntensity: 0.45 });
-  for (let ribIndex = 0; ribIndex < 12; ribIndex++) {
-    const angle = (ribIndex / 12) * Math.PI * 2;
-    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.16, 5.4, 0.2), ribMaterial);
-    rib.position.set(Math.cos(angle) * 7.95, 2.7, Math.sin(angle) * 7.95);
-    rib.rotation.y = -angle;
+  for (let ribIndex = 0; ribIndex < 8; ribIndex++) {
+    if (ribIndex === 4) continue;
+    const rib = new THREE.Mesh(
+      new THREE.TorusGeometry(canopyRadius + 0.04, 0.06, 6, 72, Math.PI),
+      ribMaterial
+    );
+    rib.position.y = 0.14;
+    rib.scale.y = canopyVerticalScale;
+    rib.rotation.y = (ribIndex / 8) * Math.PI;
     interiorGallery.add(rib);
+  }
+  [6.35].forEach((height) => {
+    const sphereHeight = height / canopyVerticalScale;
+    const latitudeRadius = Math.sqrt(canopyRadius * canopyRadius - sphereHeight * sphereHeight);
+    const latitudeRib = new THREE.Mesh(new THREE.TorusGeometry(latitudeRadius, 0.06, 6, 80), ribMaterial);
+    latitudeRib.rotation.x = Math.PI / 2;
+    latitudeRib.position.y = height + 0.14;
+    interiorGallery.add(latitudeRib);
+  });
+  const canopyCrown = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.35, 1.72, 0.42, 24),
+    stdMat(0x27383f, { metalness: 0.9, roughness: 0.24, emissive: 0x28d9ff, emissiveIntensity: 0.46 })
+  );
+  canopyCrown.position.y = canopyRadius * canopyVerticalScale + 0.18;
+  interiorGallery.add(canopyCrown);
+  for (let finIndex = 0; finIndex < 6; finIndex++) {
+    const angle = (finIndex / 6) * Math.PI * 2;
+    const fin = new THREE.Mesh(
+      new THREE.BoxGeometry(1.9, 0.28, 3.8),
+      finIndex % 2 ? hull : scorchedHull
+    );
+    fin.position.set(Math.cos(angle) * 11.85, -0.02, Math.sin(angle) * 11.85);
+    fin.rotation.y = -angle;
+    interiorGallery.add(fin);
   }
 
   const archiveTitle = makeLabelSprite("CAITLIN'S PROJECT ARCHIVE · SELECT A SCREEN", '#b8f7ff');
-  archiveTitle.position.set(0, 5.45, -5.72);
-  archiveTitle.scale.set(8.6, 0.82, 1);
+  archiveTitle.position.set(0, 8.15, -4.9);
+  archiveTitle.scale.set(9.4, 0.84, 1);
   interiorGallery.add(archiveTitle);
 
   const projectScreens = [];
   const screenLayout = [
-    { x: -4.7, y: 3.72, z: -4.55, yaw: 0.24 },
-    { x: 0, y: 3.88, z: -5.22, yaw: 0 },
-    { x: 4.7, y: 3.72, z: -4.55, yaw: -0.24 },
-    { x: -4.7, y: 1.42, z: -4.55, yaw: 0.24 },
-    { x: 0, y: 1.35, z: -5.22, yaw: 0 },
-    { x: 4.7, y: 1.42, z: -4.55, yaw: -0.24 },
+    { x: -6.6, y: 4.72, z: -6.9, yaw: 0.34 },
+    { x: 0, y: 4.92, z: -8.45, yaw: 0 },
+    { x: 6.6, y: 4.72, z: -6.9, yaw: -0.34 },
+    { x: -6.6, y: 1.82, z: -6.9, yaw: 0.34 },
+    { x: 0, y: 1.72, z: -8.45, yaw: 0 },
+    { x: 6.6, y: 1.82, z: -6.9, yaw: -0.34 },
   ];
   ARCHIVE_SCREENS.forEach((project, index) => {
     const slot = screenLayout[index];
@@ -2790,7 +3276,7 @@ function buildResearchOutpost(hub) {
       emissiveIntensity: 0.32,
     });
     const frame = new THREE.Mesh(
-      new THREE.BoxGeometry(3.48, 2.04, 0.18),
+      new THREE.BoxGeometry(4.08, 2.38, 0.2),
       frameMaterial
     );
     screenRig.add(frame);
@@ -2798,15 +3284,15 @@ function buildResearchOutpost(hub) {
       map: makeProjectScreenTexture(project, index),
       toneMapped: false,
     });
-    const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 1.75), screenMaterial);
-    screen.position.z = 0.101;
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.74, 2.04), screenMaterial);
+    screen.position.z = 0.112;
     screen.userData.projectScreenIndex = index;
     screenRig.add(screen);
     const statusLight = new THREE.Mesh(
       new THREE.SphereGeometry(0.055, 8, 6),
       new THREE.MeshBasicMaterial({ color: frameColor, toneMapped: false })
     );
-    statusLight.position.set(1.52, -0.88, 0.13);
+    statusLight.position.set(1.82, -1.03, 0.14);
     screenRig.add(statusLight);
     projectScreens.push({
       project,
@@ -2819,23 +3305,41 @@ function buildResearchOutpost(hub) {
   });
 
   const consoleDesk = new THREE.Mesh(
-    new THREE.BoxGeometry(6.5, 0.72, 1.7),
+    new THREE.BoxGeometry(8.4, 0.3, 1.7),
     stdMat(0x15232b, { metalness: 0.76, roughness: 0.38, emissive: 0x092029, emissiveIntensity: 0.5 })
   );
-  consoleDesk.position.set(0, 0.55, -1.8);
+  consoleDesk.position.set(0, 0.2, -2.8);
   consoleDesk.rotation.x = -0.08;
   interiorGallery.add(consoleDesk);
-  const archiveLight = new THREE.PointLight(0x73eaff, 5.5, 18, 2);
-  archiveLight.position.set(0, 4.9, 1.8);
+  const archiveLight = new THREE.PointLight(0x73eaff, 3.9, 26, 2);
+  archiveLight.position.set(0, 5.8, 2.4);
   interiorGallery.add(archiveLight);
-  const violetFill = new THREE.PointLight(0xa77cff, 3.2, 15, 2);
-  violetFill.position.set(-5.5, 2.4, -1.2);
+  const violetFill = new THREE.PointLight(0xa77cff, 3.2, 22, 2);
+  violetFill.position.set(-7.5, 3.1, -1.8);
   interiorGallery.add(violetFill);
+  const entryFrame = new THREE.Group();
+  entryFrame.name = 'Open project archive hatch frame';
+  entryFrame.position.set(0, 0, 10.9);
+  interiorGallery.add(entryFrame);
+  [-1, 1].forEach((side) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.24, 4.5, 0.34), ribMaterial);
+    post.position.set(side * 2.05, 2.25, 0);
+    entryFrame.add(post);
+  });
+  const header = new THREE.Mesh(new THREE.BoxGeometry(4.35, 0.28, 0.34), ribMaterial);
+  header.position.y = 4.46;
+  entryFrame.add(header);
+  const entryGlow = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.05, 4.12),
+    new THREE.MeshBasicMaterial({ color: 0x49dfff, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false })
+  );
+  entryGlow.position.y = 2.22;
+  entryFrame.add(entryGlow);
   const interiorCameraAnchor = new THREE.Object3D();
-  interiorCameraAnchor.position.set(0, 3.1, 6.7);
+  interiorCameraAnchor.position.set(0, 4.2, 8.8);
   interiorGallery.add(interiorCameraAnchor);
   const interiorLookAnchor = new THREE.Object3D();
-  interiorLookAnchor.position.set(0, 2.8, -4.25);
+  interiorLookAnchor.position.set(0, 3.4, -6.2);
   interiorGallery.add(interiorLookAnchor);
 
   const smokeCount = 34;
@@ -2888,7 +3392,8 @@ function buildResearchOutpost(hub) {
   addCollider(hub.x, hub.z, 6.8 * PROJECT_SHIP_SCALE);
   return {
     group, saucer, rimLights, interiorLight, smoke, smokeBases, smokeSpeeds, sparks, breachGlow,
-    interiorGallery, interiorCameraAnchor, interiorLookAnchor, projectScreens, archiveLight, rampApron, rampSurface,
+    interiorGallery, glassCanopy, canopyCrown, interiorCameraAnchor, interiorLookAnchor,
+    entryFrame, projectScreens, archiveLight, archiveLabel, rampApron, rampSurface,
   };
 }
 
@@ -2937,8 +3442,9 @@ function buildMarsXenobiologyGlobe(hub) {
   group.name = 'Ares Xenobiology Globe · extraterrestrial specimen conservatory';
   placeSurfaceGroup(group, hub.normal);
 
-  const globeRadius = 15.2;
-  const globeCenterY = globeRadius;
+  const globeRadius = 27.2;
+  const globeCenterY = 13.7;
+  const globeVerticalScale = 0.96;
   const trailApproachWorld = START_NORMAL.clone()
     .addScaledVector(hub.normal, -START_NORMAL.dot(hub.normal))
     .normalize();
@@ -2970,41 +3476,43 @@ function buildMarsXenobiologyGlobe(hub) {
     depthWrite: false,
   });
 
-  const floor = new THREE.Mesh(new THREE.CylinderGeometry(14.05, 14.55, 0.66, 56), foundationMaterial);
+  const floor = new THREE.Mesh(new THREE.CylinderGeometry(25.7, 26.25, 0.66, 72), foundationMaterial);
   floor.position.y = 0.33;
   group.add(floor);
-  const foundationRing = new THREE.Mesh(new THREE.TorusGeometry(14.2, 0.5, 10, 72), frameMaterial);
+  const foundationRing = new THREE.Mesh(new THREE.TorusGeometry(25.95, 0.58, 10, 104), frameMaterial);
   foundationRing.rotation.x = Math.PI / 2;
   foundationRing.position.y = 0.7;
   group.add(foundationRing);
 
-  const globe = new THREE.Mesh(new THREE.SphereGeometry(globeRadius, 52, 30), globeMaterial);
+  const globe = new THREE.Mesh(new THREE.SphereGeometry(globeRadius, 60, 34), globeMaterial);
   globe.position.y = globeCenterY;
+  globe.scale.y = globeVerticalScale;
   globe.renderOrder = 5;
   group.add(globe);
   const globeRibs = [];
-  for (let index = 0; index < 8; index++) {
-    const meridian = new THREE.Mesh(new THREE.TorusGeometry(globeRadius + 0.05, 0.105, 6, 80), frameMaterial);
+  for (let index = 0; index < 12; index++) {
+    const meridian = new THREE.Mesh(new THREE.TorusGeometry(globeRadius + 0.05, 0.105, 6, 96), frameMaterial);
     meridian.position.y = globeCenterY;
-    meridian.rotation.y = (index / 8) * Math.PI;
+    meridian.scale.y = globeVerticalScale;
+    meridian.rotation.y = (index / 12) * Math.PI;
     group.add(meridian);
     globeRibs.push(meridian);
   }
-  [-7.6, 0, 7.6].forEach((latitude) => {
+  [-17.2, -8.6, 0, 8.6, 17.2].forEach((latitude) => {
     const radius = Math.sqrt(globeRadius * globeRadius - latitude * latitude);
-    const rib = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.105, 6, 80), frameMaterial);
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.105, 6, 96), frameMaterial);
     rib.rotation.x = Math.PI / 2;
-    rib.position.y = globeCenterY + latitude;
+    rib.position.y = globeCenterY + latitude * globeVerticalScale;
     group.add(rib);
     globeRibs.push(rib);
   });
 
   const entrance = new THREE.Group();
-  entrance.position.set(trailApproachLocal.x * 13.95, 3.05, trailApproachLocal.z * 13.95);
+  entrance.position.set(trailApproachLocal.x * 25.25, 4.18, trailApproachLocal.z * 25.25);
   entrance.rotation.y = entranceYaw;
   group.add(entrance);
   const portal = new THREE.Mesh(
-    new THREE.CircleGeometry(2.55, 36),
+    new THREE.CircleGeometry(3.62, 40),
     new THREE.MeshBasicMaterial({
       color: 0x17474b,
       transparent: true,
@@ -3014,26 +3522,28 @@ function buildMarsXenobiologyGlobe(hub) {
     })
   );
   entrance.add(portal);
-  const portalFrame = new THREE.Mesh(new THREE.TorusGeometry(2.62, 0.32, 10, 40), frameMaterial);
+  const portalFrame = new THREE.Mesh(new THREE.TorusGeometry(3.7, 0.38, 10, 48), frameMaterial);
   portalFrame.position.z = 0.04;
   entrance.add(portalFrame);
   const entranceLabel = makeLabelSprite('ENTER · XENOBIOLOGY GLOBE', '#a5fff0');
-  entranceLabel.position.set(0, 3.55, 0.12);
-  entranceLabel.scale.set(6.5, 0.86, 1);
+  entranceLabel.position.set(0, 4.76, 0.12);
+  entranceLabel.scale.set(6.8, 0.8, 1);
   entrance.add(entranceLabel);
 
-  const interiorWalkway = new THREE.Mesh(new THREE.BoxGeometry(4.1, 0.18, 15), foundationMaterial);
-  interiorWalkway.position.set(trailApproachLocal.x * 7.45, 0.76, trailApproachLocal.z * 7.45);
+  const interiorWalkway = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.12, 46), foundationMaterial);
+  interiorWalkway.position.set(trailApproachLocal.x * 1.2, 0.67, trailApproachLocal.z * 1.2);
   interiorWalkway.rotation.y = entranceYaw;
   group.add(interiorWalkway);
 
   const specimenSpecs = [
-    { name: 'PRISM MANTIS · KEPLER-62F', type: 'mantis', color: 0x69f3ce, accent: 0xb483ff, substrate: 0x174a3d },
-    { name: 'EMBER BEETLE · TRAPPIST-1E', type: 'beetle', color: 0xff694a, accent: 0xffcf5a, substrate: 0x4b1c13 },
-    { name: 'LUNA HOPPER · PROXIMA B', type: 'hopper', color: 0xa9d9ff, accent: 0xf3fbff, substrate: 0x38444d },
+    { name: 'SPACE SNAKE · KEPLER-186F', type: 'snake', color: 0x55f2c3, accent: 0xb483ff, substrate: 0x174a3d },
+    { name: 'MOON BUNNY · PROXIMA B', type: 'bunny', color: 0xb7dfff, accent: 0xff9ee5, substrate: 0x38444d },
+    { name: 'NEBULA CAT · TRAPPIST-1E', type: 'cat', color: 0x9b79ff, accent: 0x78efff, substrate: 0x2f2348 },
     { name: 'VOID BEE · WASP-96B', type: 'bee', color: 0xf3c64f, accent: 0x8f6cff, substrate: 0x312740 },
     { name: 'CLOUD JELLY · K2-18B', type: 'jelly', color: 0x73dfff, accent: 0xff91df, substrate: 0x17394c },
     { name: 'CRYSTAL SNAIL · TOI-700D', type: 'snail', color: 0xb5ffeb, accent: 0x65a2ff, substrate: 0x263758 },
+    { name: 'SOLAR BUTTERFLY · HD 189733B', type: 'butterfly', color: 0xff7edb, accent: 0x76f7ff, substrate: 0x352342 },
+    { name: 'COMET TIGER · GLIESE 667CC', type: 'tiger', color: 0xff9d38, accent: 0x69f5ff, substrate: 0x3a281d },
   ];
   const creatureRuntimes = [];
 
@@ -3042,7 +3552,7 @@ function buildMarsXenobiologyGlobe(hub) {
     creature.name = spec.name;
     const bodyMaterial = stdMat(spec.color, {
       roughness: spec.type === 'jelly' ? 0.18 : 0.48,
-      metalness: spec.type === 'beetle' ? 0.34 : 0.08,
+      metalness: spec.type === 'cat' ? 0.22 : 0.08,
       emissive: spec.color,
       emissiveIntensity: 0.34,
       transparent: spec.type === 'jelly',
@@ -3055,6 +3565,9 @@ function buildMarsXenobiologyGlobe(hub) {
     });
     const darkMaterial = stdMat(0x091012, { roughness: 0.72, metalness: 0.16 });
     const wings = [];
+    const segments = [];
+    const ears = [];
+    const tailSegments = [];
     let body;
 
     if (spec.type === 'jelly') {
@@ -3069,58 +3582,254 @@ function buildMarsXenobiologyGlobe(hub) {
         tentacle.rotation.z = Math.sin(angle) * 0.18;
         creature.add(tentacle);
       }
-    } else {
+    } else if (spec.type === 'snake') {
+      for (let segmentIndex = 0; segmentIndex < 9; segmentIndex++) {
+        const progress = segmentIndex / 8;
+        const radius = THREE.MathUtils.lerp(0.32, 0.13, progress);
+        const segment = new THREE.Mesh(new THREE.SphereGeometry(radius, 14, 10), bodyMaterial);
+        segment.position.set(Math.sin(segmentIndex * 0.82) * 0.28, 0.72 + Math.sin(segmentIndex * 0.5) * 0.05, -0.75 + segmentIndex * 0.24);
+        segment.scale.z = 1.18;
+        creature.add(segment);
+        segments.push({
+          mesh: segment,
+          index: segmentIndex,
+          baseX: segment.position.x,
+          baseY: segment.position.y,
+        });
+      }
+      body = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 12), bodyMaterial);
+      body.position.set(0, 0.82, -1.07);
+      body.scale.set(1.12, 0.8, 1.28);
+      creature.add(body);
+      [-1, 1].forEach((side) => {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), accentMaterial);
+        eye.position.set(side * 0.19, 0.91, -1.43);
+        creature.add(eye);
+      });
+      for (let crestIndex = 0; crestIndex < 3; crestIndex++) {
+        const crest = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.35, 5), accentMaterial);
+        crest.position.set(0, 1.17 - crestIndex * 0.04, -1.0 + crestIndex * 0.23);
+        creature.add(crest);
+      }
+    } else if (spec.type === 'bunny') {
+      body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 18, 14), bodyMaterial);
+      body.position.y = 0.84;
+      body.scale.set(0.82, 1.02, 0.78);
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), bodyMaterial);
+      head.position.set(0, 1.38, -0.4);
+      creature.add(head);
+      [-1, 1].forEach((side) => {
+        const ear = new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.58, 5, 10), bodyMaterial);
+        ear.position.set(side * 0.19, 1.94, -0.36);
+        ear.rotation.z = side * -0.12;
+        creature.add(ear);
+        ears.push({ mesh: ear, side, baseRotation: ear.rotation.z });
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), darkMaterial);
+        eye.position.set(side * 0.17, 1.46, -0.76);
+        creature.add(eye);
+        const rearPaw = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), accentMaterial);
+        rearPaw.position.set(side * 0.38, 0.45, 0.27);
+        rearPaw.scale.set(1.35, 0.55, 1.7);
+        creature.add(rearPaw);
+      });
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), accentMaterial);
+      nose.position.set(0, 1.34, -0.82);
+      creature.add(nose);
+      const tail = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), accentMaterial);
+      tail.position.set(0, 0.88, 0.54);
+      creature.add(tail);
+    } else if (spec.type === 'cat') {
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.68, 6, 14), bodyMaterial);
+      body.position.set(0, 0.88, 0.04);
+      body.rotation.x = Math.PI / 2;
+      body.scale.set(0.9, 1, 0.82);
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), bodyMaterial);
+      head.position.set(0, 1.27, -0.64);
+      creature.add(head);
+      [-1, 1].forEach((side) => {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.43, 4), accentMaterial);
+        ear.position.set(side * 0.22, 1.69, -0.63);
+        ear.rotation.y = Math.PI / 4;
+        creature.add(ear);
+        ears.push({ mesh: ear, side, baseRotation: ear.rotation.z });
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.072, 10, 8), accentMaterial);
+        eye.position.set(side * 0.16, 1.34, -1.01);
+        creature.add(eye);
+        for (let legIndex = 0; legIndex < 2; legIndex++) {
+          const paw = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.35, 4, 8), darkMaterial);
+          paw.position.set(side * 0.28, 0.43, legIndex === 0 ? -0.32 : 0.34);
+          creature.add(paw);
+        }
+      });
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 7, 18), accentMaterial);
+      collar.position.set(0, 1.08, -0.56);
+      collar.rotation.x = Math.PI / 2;
+      creature.add(collar);
+      for (let tailIndex = 0; tailIndex < 6; tailIndex++) {
+        const tailPart = new THREE.Mesh(new THREE.SphereGeometry(0.105 - tailIndex * 0.007, 10, 8), bodyMaterial);
+        tailPart.position.set(0.08 + tailIndex * 0.09, 0.92 + tailIndex * 0.12, 0.72 + tailIndex * 0.13);
+        creature.add(tailPart);
+        tailSegments.push({
+          mesh: tailPart,
+          index: tailIndex,
+          baseX: tailPart.position.x,
+          baseY: tailPart.position.y,
+        });
+      }
+    } else if (spec.type === 'butterfly') {
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 1.05, 5, 12), bodyMaterial);
+      body.position.set(0, 1.12, 0);
+      body.rotation.x = Math.PI / 2;
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 10), accentMaterial);
+      head.position.set(0, 1.14, -0.72);
+      creature.add(head);
+      [-1, 1].forEach((side) => {
+        const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.028, 0.64, 6), accentMaterial);
+        antenna.position.set(side * 0.12, 1.48, -0.88);
+        antenna.rotation.z = side * -0.28;
+        antenna.rotation.x = -0.42;
+        creature.add(antenna);
+        const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), accentMaterial);
+        antennaTip.position.set(side * 0.22, 1.72, -1.1);
+        creature.add(antennaTip);
+        [-0.3, 0.3].forEach((wingZ, wingIndex) => {
+          const wing = new THREE.Mesh(
+            new THREE.SphereGeometry(0.72 - wingIndex * 0.12, 16, 10),
+            new THREE.MeshPhysicalMaterial({
+              color: wingIndex === 0 ? spec.color : spec.accent,
+              emissive: wingIndex === 0 ? spec.color : spec.accent,
+              emissiveIntensity: 0.78,
+              transparent: true,
+              opacity: 0.72,
+              roughness: 0.18,
+              transmission: 0.2,
+              depthWrite: false,
+            })
+          );
+          wing.position.set(side * (0.58 + wingIndex * 0.12), 1.16, wingZ);
+          wing.scale.set(1.15, 0.12, 0.78);
+          wing.rotation.z = side * 0.42;
+          creature.add(wing);
+          wings.push({ mesh: wing, side });
+        });
+      });
+      for (let stripeIndex = 0; stripeIndex < 4; stripeIndex++) {
+        const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.035, 6, 14), accentMaterial);
+        stripe.position.set(0, 1.12, -0.34 + stripeIndex * 0.24);
+        creature.add(stripe);
+      }
+    } else if (spec.type === 'tiger') {
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.48, 1.18, 6, 14), bodyMaterial);
+      body.position.set(0, 1.05, 0.08);
+      body.rotation.x = Math.PI / 2;
+      body.scale.set(1, 1.18, 0.82);
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.48, 18, 12), bodyMaterial);
+      head.position.set(0, 1.26, -0.92);
+      head.scale.set(1, 0.92, 0.9);
+      creature.add(head);
+      [-1, 1].forEach((side) => {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.38, 4), accentMaterial);
+        ear.position.set(side * 0.28, 1.68, -0.89);
+        ear.rotation.y = Math.PI / 4;
+        creature.add(ear);
+        ears.push({ mesh: ear, side, baseRotation: ear.rotation.z });
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), accentMaterial);
+        eye.position.set(side * 0.18, 1.34, -1.34);
+        creature.add(eye);
+        const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), stdMat(0xffd6a0, { roughness: 0.62 }));
+        cheek.position.set(side * 0.17, 1.14, -1.29);
+        creature.add(cheek);
+        [-0.38, 0.42].forEach((legZ) => {
+          const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.48, 4, 8), bodyMaterial);
+          leg.position.set(side * 0.35, 0.5, legZ);
+          creature.add(leg);
+        });
+      });
+      const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), darkMaterial);
+      muzzle.position.set(0, 1.22, -1.43);
+      creature.add(muzzle);
+      [-0.5, -0.08, 0.34, 0.7].forEach((stripeZ) => {
+        const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.49, 0.055, 6, 18), darkMaterial);
+        stripe.position.set(0, 1.05, stripeZ);
+        stripe.scale.set(1, 0.84, 1);
+        creature.add(stripe);
+      });
+      for (let tailIndex = 0; tailIndex < 7; tailIndex++) {
+        const tailPart = new THREE.Mesh(new THREE.SphereGeometry(0.115 - tailIndex * 0.008, 10, 8), tailIndex % 2 ? darkMaterial : bodyMaterial);
+        tailPart.position.set(0.08 + tailIndex * 0.12, 1.08 + tailIndex * 0.11, 1.02 + tailIndex * 0.1);
+        creature.add(tailPart);
+        tailSegments.push({
+          mesh: tailPart,
+          index: tailIndex,
+          baseX: tailPart.position.x,
+          baseY: tailPart.position.y,
+        });
+      }
+    } else if (spec.type === 'bee') {
       body = new THREE.Mesh(new THREE.SphereGeometry(0.52, 18, 12), bodyMaterial);
       body.position.y = 0.86;
-      body.scale.set(
-        spec.type === 'mantis' ? 0.58 : spec.type === 'snail' ? 1.18 : 0.9,
-        spec.type === 'hopper' ? 0.92 : 0.7,
-        spec.type === 'mantis' ? 1.5 : spec.type === 'bee' ? 1.35 : 1.05
-      );
+      body.scale.set(0.9, 0.7, 1.35);
       creature.add(body);
-      const head = new THREE.Mesh(new THREE.SphereGeometry(spec.type === 'hopper' ? 0.42 : 0.31, 14, 10), accentMaterial);
-      head.position.set(0, spec.type === 'hopper' ? 1.22 : 0.98, -0.66);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.31, 14, 10), accentMaterial);
+      head.position.set(0, 0.98, -0.66);
       creature.add(head);
       [-1, 1].forEach((side) => {
         const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), darkMaterial);
         eye.position.set(side * 0.17, head.position.y + 0.06, -0.91);
         creature.add(eye);
       });
-      const legCount = spec.type === 'snail' ? 2 : 6;
-      for (let legIndex = 0; legIndex < legCount; legIndex++) {
+      for (let legIndex = 0; legIndex < 6; legIndex++) {
         const side = legIndex % 2 === 0 ? -1 : 1;
         const row = Math.floor(legIndex / 2);
-        const legLength = spec.type === 'hopper' && row === 2 ? 1.25 : 0.72;
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, legLength, 6), darkMaterial);
-        leg.position.set(side * (spec.type === 'hopper' && row === 2 ? 0.64 : 0.47), 0.48, (row - 1) * 0.36);
-        leg.rotation.z = side * (spec.type === 'hopper' && row === 2 ? 1.04 : 0.86);
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, 0.72, 6), darkMaterial);
+        leg.position.set(side * 0.47, 0.48, (row - 1) * 0.36);
+        leg.rotation.z = side * 0.86;
         leg.rotation.x = (row - 1) * 0.28;
         creature.add(leg);
       }
-      if (spec.type === 'mantis' || spec.type === 'bee') {
-        [-1, 1].forEach((side) => {
-          const wing = new THREE.Mesh(
-            new THREE.SphereGeometry(0.48, 12, 8),
-            new THREE.MeshBasicMaterial({ color: spec.accent, transparent: true, opacity: 0.38, depthWrite: false, toneMapped: false })
-          );
-          wing.position.set(side * 0.47, 1.05, 0.14);
-          wing.scale.set(0.5, 0.12, 1.25);
-          wing.rotation.z = side * 0.42;
-          creature.add(wing);
-          wings.push({ mesh: wing, side });
-        });
-      }
-      if (spec.type === 'beetle') {
-        const shellLine = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.95), accentMaterial);
-        shellLine.position.set(0, 1.12, 0.08);
-        creature.add(shellLine);
-      }
-      if (spec.type === 'snail') {
-        const shell = new THREE.Mesh(new THREE.SphereGeometry(0.56, 16, 12), accentMaterial);
-        shell.position.set(0, 1.05, 0.2);
-        shell.scale.z = 0.5;
-        creature.add(shell);
-      }
+      [-1, 1].forEach((side) => {
+        const wing = new THREE.Mesh(
+          new THREE.SphereGeometry(0.48, 12, 8),
+          new THREE.MeshBasicMaterial({ color: spec.accent, transparent: true, opacity: 0.38, depthWrite: false, toneMapped: false })
+        );
+        wing.position.set(side * 0.47, 1.05, 0.14);
+        wing.scale.set(0.5, 0.12, 1.25);
+        wing.rotation.z = side * 0.42;
+        creature.add(wing);
+        wings.push({ mesh: wing, side });
+      });
+      [-0.34, 0.05, 0.4].forEach((stripeZ) => {
+        const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.055, 6, 18), darkMaterial);
+        stripe.position.set(0, 0.87, stripeZ);
+        stripe.rotation.x = Math.PI / 2;
+        stripe.scale.set(0.9, 1, 0.7);
+        creature.add(stripe);
+      });
+    } else {
+      body = new THREE.Mesh(new THREE.SphereGeometry(0.58, 18, 12), bodyMaterial);
+      body.position.set(0, 0.68, 0.12);
+      body.scale.set(1.45, 0.42, 0.72);
+      creature.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 10), bodyMaterial);
+      head.position.set(0, 0.83, -0.78);
+      creature.add(head);
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.58, 18, 14), accentMaterial);
+      shell.position.set(0, 1.12, 0.2);
+      shell.scale.z = 0.48;
+      creature.add(shell);
+      [-1, 1].forEach((side) => {
+        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.42, 6), bodyMaterial);
+        stalk.position.set(side * 0.14, 1.11, -0.92);
+        stalk.rotation.z = side * -0.18;
+        creature.add(stalk);
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), darkMaterial);
+        eye.position.set(side * 0.18, 1.31, -0.96);
+        creature.add(eye);
+      });
     }
 
     creature.position.y = 0.68;
@@ -3129,6 +3838,9 @@ function buildMarsXenobiologyGlobe(hub) {
       body,
       bodyBaseScaleY: body.scale.y,
       wings,
+      segments,
+      ears,
+      tailSegments,
       baseY: creature.position.y,
       phase: specimenIndex * 1.37,
       type: spec.type,
@@ -3138,10 +3850,46 @@ function buildMarsXenobiologyGlobe(hub) {
   const habitatHall = new THREE.Group();
   habitatHall.rotation.y = entranceYaw;
   group.add(habitatHall);
+  function makeMuseumPlaqueTexture(spec, exhibitNumber) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 768;
+    canvas.height = 220;
+    const ctx = canvas.getContext('2d');
+    const accentHex = `#${spec.accent.toString(16).padStart(6, '0')}`;
+    const [speciesName, worldName = 'UNCLASSIFIED ORIGIN'] = spec.name.split(' · ');
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, '#08151b');
+    gradient.addColorStop(1, '#142d35');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 7;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = accentHex;
+    ctx.font = '900 28px monospace';
+    ctx.fillText(`EXHIBIT ${String(exhibitNumber).padStart(2, '0')} · LIVE SPECIMEN`, 38, 46, 690);
+    ctx.fillStyle = '#f0ffff';
+    ctx.font = '900 50px sans-serif';
+    ctx.fillText(speciesName, 38, 112, 690);
+    ctx.fillStyle = '#a8d8dc';
+    ctx.font = '800 25px monospace';
+    ctx.fillText(`ORIGIN · ${worldName}`, 38, 174, 690);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
   const habitatSlots = [
-    { x: -4.8, z: 2.65 }, { x: 0, z: 2.65 }, { x: 4.8, z: 2.65 },
-    { x: -4.8, z: -2.45 }, { x: 0, z: -2.45 }, { x: 4.8, z: -2.45 },
+    { x: -10.1, z: 11.2 }, { x: 10.1, z: 11.2 },
+    { x: -10.1, z: 4.5 }, { x: 10.1, z: 4.5 },
+    { x: -10.1, z: -2.2 }, { x: 10.1, z: -2.2 },
+    { x: -10.1, z: -8.9 }, { x: 10.1, z: -8.9 },
   ];
+  const museumTitle = makeLabelSprite('WALK-THROUGH XENOBIOLOGY MUSEUM · LIVE SPECIMENS', '#d0fff5');
+  museumTitle.position.set(0, 17.4, -20.8);
+  museumTitle.scale.set(11.4, 0.96, 1);
+  habitatHall.add(museumTitle);
   specimenSpecs.forEach((spec, index) => {
     const slot = habitatSlots[index];
     const habitat = new THREE.Group();
@@ -3154,15 +3902,22 @@ function buildMarsXenobiologyGlobe(hub) {
       emissive: spec.accent,
       emissiveIntensity: 0.28,
     });
-    const base = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.48, 4.05), baseMaterial);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(4.55, 0.58, 4.55), baseMaterial);
     base.position.y = 0.52;
     habitat.add(base);
     const substrate = new THREE.Mesh(
-      new THREE.BoxGeometry(3.5, 0.15, 3.5),
+      new THREE.BoxGeometry(3.85, 0.15, 3.85),
       stdMat(spec.substrate, { roughness: 0.94, emissive: spec.color, emissiveIntensity: 0.12 })
     );
-    substrate.position.y = 0.83;
+    substrate.position.y = 0.88;
     habitat.add(substrate);
+    const displayRing = new THREE.Mesh(
+      new THREE.RingGeometry(1.28, 1.62, 32),
+      new THREE.MeshBasicMaterial({ color: spec.accent, transparent: true, opacity: 0.68, side: THREE.DoubleSide, toneMapped: false })
+    );
+    displayRing.rotation.x = -Math.PI / 2;
+    displayRing.position.y = 0.975;
+    habitat.add(displayRing);
     const glassMaterial = new THREE.MeshPhysicalMaterial({
       color: index % 2 === 0 ? 0x9df8ff : 0xd5bdff,
       transparent: true,
@@ -3174,8 +3929,8 @@ function buildMarsXenobiologyGlobe(hub) {
       side: THREE.DoubleSide,
       depthWrite: false,
     });
-    const glassCube = new THREE.Mesh(new THREE.BoxGeometry(3.9, 3.65, 3.9), glassMaterial);
-    glassCube.position.y = 2.55;
+    const glassCube = new THREE.Mesh(new THREE.BoxGeometry(4.35, 4.55, 4.35), glassMaterial);
+    glassCube.position.y = 3.12;
     glassCube.renderOrder = 3;
     habitat.add(glassCube);
     const glassEdges = new THREE.LineSegments(
@@ -3184,6 +3939,12 @@ function buildMarsXenobiologyGlobe(hub) {
     );
     glassEdges.position.copy(glassCube.position);
     habitat.add(glassEdges);
+    const canopy = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.72, 1.72, 0.13, 24),
+      stdMat(spec.accent, { emissive: spec.accent, emissiveIntensity: 1.1, metalness: 0.72, roughness: 0.28 })
+    );
+    canopy.position.y = 5.34;
+    habitat.add(canopy);
     for (let propIndex = 0; propIndex < 3; propIndex++) {
       const prop = new THREE.Mesh(
         index % 2 === 0
@@ -3199,21 +3960,429 @@ function buildMarsXenobiologyGlobe(hub) {
       habitat.add(prop);
     }
     const creatureRuntime = createSpecimenCreature(spec, index);
+    creatureRuntime.group.scale.setScalar(1.18);
     habitat.add(creatureRuntime.group);
     creatureRuntimes.push(creatureRuntime);
     const label = makeLabelSprite(spec.name, index % 2 === 0 ? '#a6ffe8' : '#e2c5ff');
-    label.position.set(0, 4.82, 0);
-    label.scale.set(4.15, 0.68, 1);
+    label.position.set(0, 5.78, 0);
+    label.scale.set(3.75, 0.52, 1);
     habitat.add(label);
+
+    const aisleSide = slot.x < 0 ? 1 : -1;
+    const plaqueBacking = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 1.08, 3.2),
+      stdMat(0x0c171b, { metalness: 0.82, roughness: 0.32, emissive: spec.accent, emissiveIntensity: 0.2 })
+    );
+    plaqueBacking.position.set(aisleSide * 2.46, 1.55, 0);
+    habitat.add(plaqueBacking);
+    const plaque = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.02, 0.88),
+      new THREE.MeshBasicMaterial({
+        map: makeMuseumPlaqueTexture(spec, index + 1),
+        transparent: true,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      })
+    );
+    plaque.position.set(aisleSide * 2.53, 1.55, 0);
+    plaque.rotation.y = aisleSide > 0 ? Math.PI / 2 : -Math.PI / 2;
+    habitat.add(plaque);
   });
+
+  const monkeyRoot = new THREE.Group();
+  monkeyRoot.name = 'Orbit · free-roaming autonomous space monkey';
+  monkeyRoot.position.set(0, 0.7, 12.8);
+  habitatHall.add(monkeyRoot);
+  const monkeyFur = stdMat(0x6b4aa8, {
+    roughness: 0.72,
+    emissive: 0x25163e,
+    emissiveIntensity: 0.34,
+  });
+  const monkeySkin = stdMat(0x9cf4e3, {
+    roughness: 0.48,
+    emissive: 0x195c59,
+    emissiveIntensity: 0.42,
+  });
+  const monkeySuit = stdMat(0xd5e8ee, {
+    metalness: 0.66,
+    roughness: 0.28,
+    emissive: 0x163b4a,
+    emissiveIntensity: 0.38,
+  });
+  const monkeyDark = stdMat(0x071116, { roughness: 0.62, metalness: 0.2 });
+  const monkeyTorso = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.72, 6, 12), monkeyFur);
+  monkeyTorso.position.y = 1.34;
+  monkeyTorso.scale.set(1, 1, 0.82);
+  monkeyRoot.add(monkeyTorso);
+  const monkeyBelly = new THREE.Mesh(new THREE.SphereGeometry(0.31, 14, 10), monkeySkin);
+  monkeyBelly.position.set(0, 1.34, -0.29);
+  monkeyBelly.scale.set(0.82, 1.18, 0.36);
+  monkeyRoot.add(monkeyBelly);
+  const monkeyHead = new THREE.Mesh(new THREE.SphereGeometry(0.43, 18, 14), monkeyFur);
+  monkeyHead.position.set(0, 2.12, -0.06);
+  monkeyRoot.add(monkeyHead);
+  const monkeyMuzzle = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10), monkeySkin);
+  monkeyMuzzle.position.set(0, 2.02, -0.39);
+  monkeyMuzzle.scale.set(1.15, 0.78, 0.72);
+  monkeyRoot.add(monkeyMuzzle);
+  [-1, 1].forEach((side) => {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 9), monkeySkin);
+    ear.position.set(side * 0.4, 2.18, -0.02);
+    ear.scale.x = 0.55;
+    monkeyRoot.add(ear);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.065, 9, 7), monkeyDark);
+    eye.position.set(side * 0.15, 2.2, -0.4);
+    monkeyRoot.add(eye);
+  });
+  const monkeyNose = new THREE.Mesh(new THREE.SphereGeometry(0.075, 9, 7), monkeyDark);
+  monkeyNose.position.set(0, 2.08, -0.59);
+  monkeyRoot.add(monkeyNose);
+  const helmet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.63, 22, 16),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x9defff,
+      emissive: 0x0b4655,
+      emissiveIntensity: 0.32,
+      transparent: true,
+      opacity: 0.18,
+      transmission: 0.46,
+      roughness: 0.06,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  helmet.position.set(0, 2.1, -0.02);
+  helmet.renderOrder = 5;
+  monkeyRoot.add(helmet);
+  const helmetCollar = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.07, 7, 22), monkeySuit);
+  helmetCollar.rotation.x = Math.PI / 2;
+  helmetCollar.position.set(0, 1.69, -0.01);
+  monkeyRoot.add(helmetCollar);
+  const lifeSupportPack = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.82, 0.3), monkeySuit);
+  lifeSupportPack.position.set(0, 1.35, 0.39);
+  monkeyRoot.add(lifeSupportPack);
+
+  const monkeyArms = [];
+  const monkeyLegs = [];
+  [-1, 1].forEach((side) => {
+    const armPivot = new THREE.Group();
+    armPivot.position.set(side * 0.42, 1.58, 0);
+    monkeyRoot.add(armPivot);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.66, 4, 8), monkeyFur);
+    arm.position.y = -0.37;
+    arm.rotation.z = side * -0.1;
+    armPivot.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), monkeySkin);
+    hand.position.set(side * 0.06, -0.78, -0.02);
+    armPivot.add(hand);
+    monkeyArms.push({ pivot: armPivot, side });
+
+    const legPivot = new THREE.Group();
+    legPivot.position.set(side * 0.22, 0.92, 0);
+    monkeyRoot.add(legPivot);
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.52, 4, 8), monkeyFur);
+    leg.position.y = -0.31;
+    legPivot.add(leg);
+    const boot = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), monkeySuit);
+    boot.position.set(0, -0.66, -0.1);
+    boot.scale.set(0.9, 0.62, 1.45);
+    legPivot.add(boot);
+    monkeyLegs.push({ pivot: legPivot, side });
+  });
+  const monkeyTailSegments = [];
+  for (let tailIndex = 0; tailIndex < 11; tailIndex++) {
+    const tailSegment = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11 - tailIndex * 0.0045, 10, 8),
+      tailIndex === 10 ? monkeySkin : monkeyFur
+    );
+    tailSegment.position.set(
+      0.06 + Math.sin(tailIndex * 0.38) * (0.1 + tailIndex * 0.035),
+      1.05 + tailIndex * 0.055,
+      0.42 + tailIndex * 0.15
+    );
+    monkeyRoot.add(tailSegment);
+    monkeyTailSegments.push({
+      mesh: tailSegment,
+      index: tailIndex,
+      baseX: tailSegment.position.x,
+      baseY: tailSegment.position.y,
+    });
+  }
+  const museumMonkey = {
+    root: monkeyRoot,
+    torso: monkeyTorso,
+    head: monkeyHead,
+    arms: monkeyArms,
+    legs: monkeyLegs,
+    tailSegments: monkeyTailSegments,
+    waypoints: [
+      new THREE.Vector3(0, 0.7, 12.8),
+      new THREE.Vector3(-3.4, 0.7, 7.2),
+      new THREE.Vector3(3.2, 0.7, 1.2),
+      new THREE.Vector3(-3.1, 0.7, -5.4),
+      new THREE.Vector3(2.8, 0.7, -12.2),
+      new THREE.Vector3(0.4, 0.7, -3.4),
+    ],
+    waypointIndex: 1,
+    pause: 0,
+    speed: 1.35,
+    phase: 1.7,
+    toWaypoint: new THREE.Vector3(),
+  };
+
+  const aquarium = new THREE.Group();
+  aquarium.name = 'Panoramic Europa alien ocean wall';
+  aquarium.position.set(0, 0, -20.4);
+  habitatHall.add(aquarium);
+  const aquariumWidth = 23.2;
+  const aquariumHeight = 11.8;
+  const aquariumDepth = 3.1;
+  const aquariumCenterY = 6.75;
+  const aquariumPedestal = new THREE.Mesh(
+    new THREE.BoxGeometry(aquariumWidth + 1.1, 0.82, aquariumDepth + 0.85),
+    stdMat(0x10252d, { metalness: 0.78, roughness: 0.34, emissive: 0x0d7181, emissiveIntensity: 0.46 })
+  );
+  aquariumPedestal.position.y = 0.42;
+  aquarium.add(aquariumPedestal);
+  const waterMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x24b8d4,
+    emissive: 0x063e54,
+    emissiveIntensity: 0.52,
+    transparent: true,
+    opacity: 0.3,
+    transmission: 0.38,
+    roughness: 0.12,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const aquariumWater = new THREE.Mesh(
+    new THREE.BoxGeometry(aquariumWidth - 0.45, aquariumHeight - 0.45, aquariumDepth - 0.4),
+    waterMaterial
+  );
+  aquariumWater.position.y = aquariumCenterY;
+  aquariumWater.renderOrder = 2;
+  aquarium.add(aquariumWater);
+  const tankGlassMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xa5f7ff,
+    emissive: 0x0b4c5c,
+    emissiveIntensity: 0.34,
+    transparent: true,
+    opacity: 0.18,
+    transmission: 0.54,
+    thickness: 0.3,
+    roughness: 0.06,
+    metalness: 0.02,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const aquariumGlass = new THREE.Mesh(
+    new THREE.PlaneGeometry(aquariumWidth, aquariumHeight),
+    tankGlassMaterial
+  );
+  aquariumGlass.position.set(0, aquariumCenterY, aquariumDepth * 0.5 + 0.04);
+  aquariumGlass.renderOrder = 4;
+  aquarium.add(aquariumGlass);
+  const aquariumEdges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(aquariumWidth, aquariumHeight, aquariumDepth)),
+    new THREE.LineBasicMaterial({ color: 0x62f4ff, transparent: true, opacity: 0.88, toneMapped: false })
+  );
+  aquariumEdges.position.y = aquariumCenterY;
+  aquarium.add(aquariumEdges);
+  [
+    { size: [aquariumWidth + 0.55, 0.3, 0.34], position: [0, aquariumCenterY - aquariumHeight * 0.5, aquariumDepth * 0.5 + 0.08] },
+    { size: [aquariumWidth + 0.55, 0.3, 0.34], position: [0, aquariumCenterY + aquariumHeight * 0.5, aquariumDepth * 0.5 + 0.08] },
+    { size: [0.3, aquariumHeight, 0.34], position: [-aquariumWidth * 0.5, aquariumCenterY, aquariumDepth * 0.5 + 0.08] },
+    { size: [0.3, aquariumHeight, 0.34], position: [aquariumWidth * 0.5, aquariumCenterY, aquariumDepth * 0.5 + 0.08] },
+  ].forEach((bar) => {
+    const frameBar = new THREE.Mesh(
+      new THREE.BoxGeometry(...bar.size),
+      stdMat(0x55dce9, { metalness: 0.82, roughness: 0.22, emissive: 0x21c8dc, emissiveIntensity: 0.85 })
+    );
+    frameBar.position.set(...bar.position);
+    aquarium.add(frameBar);
+  });
+
+  for (let propIndex = 0; propIndex < 11; propIndex++) {
+    const kelp = new THREE.Mesh(
+      new THREE.ConeGeometry(0.16 + (propIndex % 3) * 0.06, 1.9 + (propIndex % 4) * 0.55, 7),
+      stdMat(propIndex % 2 ? 0x36ffb0 : 0x8b75ff, {
+        emissive: propIndex % 2 ? 0x0f7f5b : 0x39247d,
+        emissiveIntensity: 0.7,
+        roughness: 0.48,
+      })
+    );
+    kelp.position.set(-9.7 + propIndex * 1.92, 1.45 + (propIndex % 4) * 0.28, 0.15 + (propIndex % 3) * 0.3);
+    kelp.rotation.z = Math.sin(propIndex * 1.7) * 0.18;
+    aquarium.add(kelp);
+  }
+
+  const fishSpecs = [
+    { color: 0xff6bd6, accent: 0x71f7ff, x: -6.8, height: 1.3, speed: 0.48, range: 8.4, phase: 0.2 },
+    { color: 0x8dff70, accent: 0xffd86c, x: 4.2, height: -1.65, speed: 0.38, range: 9.2, phase: 1.7 },
+    { color: 0xff9b55, accent: 0x9b7cff, x: 0.8, height: 2.8, speed: 0.56, range: 7.8, phase: 3.1 },
+    { color: 0x61a5ff, accent: 0xfff28a, x: -2.7, height: -0.1, speed: 0.44, range: 9.6, phase: 4.4 },
+    { color: 0xff5c72, accent: 0x7dffd8, x: 7.4, height: 0.55, speed: 0.62, range: 8.7, phase: 5.3 },
+  ];
+  const fishRuntimes = fishSpecs.map((fishSpec, fishIndex) => {
+    const fish = new THREE.Group();
+    fish.position.set(fishSpec.x, aquariumCenterY + fishSpec.height, 0.55 - (fishIndex % 3) * 0.52);
+    aquarium.add(fish);
+    const fishMaterial = stdMat(fishSpec.color, { emissive: fishSpec.color, emissiveIntensity: 0.58, roughness: 0.3 });
+    const finMaterial = stdMat(fishSpec.accent, { emissive: fishSpec.accent, emissiveIntensity: 0.82, roughness: 0.24 });
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.52, 16, 12), fishMaterial);
+    body.scale.set(1.32, 0.66, 0.62);
+    fish.add(body);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.78, 5), finMaterial);
+    tail.position.x = -0.78;
+    tail.rotation.z = -Math.PI / 2;
+    fish.add(tail);
+    [-1, 1].forEach((side) => {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 9, 7), stdMat(0x061015, { roughness: 0.5 }));
+      eye.position.set(0.48, 0.12, side * 0.23);
+      fish.add(eye);
+      const fin = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.48, 5), finMaterial);
+      fin.position.set(-0.05, -0.05, side * 0.37);
+      fin.rotation.x = side * Math.PI / 2;
+      fish.add(fin);
+    });
+    const crest = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.58, 5), finMaterial);
+    crest.position.set(-0.02, 0.46, 0);
+    fish.add(crest);
+    return {
+      fish,
+      tail,
+      baseY: aquariumCenterY + fishSpec.height,
+      baseZ: fish.position.z,
+      range: fishSpec.range,
+      speed: fishSpec.speed,
+      phase: fishSpec.phase,
+    };
+  });
+
+  const aquariumSquidRoot = new THREE.Group();
+  aquariumSquidRoot.name = 'Europa abyssal space squid';
+  aquariumSquidRoot.position.set(0, aquariumCenterY + 0.05, 0.62);
+  aquariumSquidRoot.scale.setScalar(1.22);
+  aquarium.add(aquariumSquidRoot);
+  const squidMantleMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8538dc,
+    emissive: 0x5212a6,
+    emissiveIntensity: 1.05,
+    roughness: 0.36,
+    metalness: 0.08,
+  });
+  const squidAccentMaterial = stdMat(0x75fff0, {
+    emissive: 0x22d8c7,
+    emissiveIntensity: 1.05,
+    roughness: 0.26,
+  });
+  const squidDarkMaterial = stdMat(0x08101c, { roughness: 0.5, metalness: 0.18 });
+  const squidMantle = new THREE.Mesh(new THREE.SphereGeometry(0.9, 20, 14), squidMantleMaterial);
+  squidMantle.position.y = 0.72;
+  squidMantle.scale.set(0.84, 1.5, 0.76);
+  aquariumSquidRoot.add(squidMantle);
+  const squidHead = new THREE.Mesh(new THREE.SphereGeometry(0.62, 18, 12), squidMantleMaterial);
+  squidHead.position.y = -0.34;
+  squidHead.scale.set(1.06, 0.78, 0.9);
+  aquariumSquidRoot.add(squidHead);
+  [-1, 1].forEach((side) => {
+    const eyeSocket = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 9), squidAccentMaterial);
+    eyeSocket.position.set(side * 0.3, -0.28, 0.52);
+    aquariumSquidRoot.add(eyeSocket);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.075, 9, 7), squidDarkMaterial);
+    pupil.position.set(side * 0.3, -0.27, 0.66);
+    pupil.scale.y = 1.55;
+    aquariumSquidRoot.add(pupil);
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.88, 5), squidAccentMaterial);
+    fin.position.set(side * 0.88, 0.82, 0);
+    fin.rotation.z = side * -Math.PI / 2;
+    aquariumSquidRoot.add(fin);
+  });
+  for (let spotIndex = 0; spotIndex < 9; spotIndex++) {
+    const spotAngle = (spotIndex / 9) * Math.PI * 2;
+    const glowSpot = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), squidAccentMaterial);
+    glowSpot.position.set(Math.cos(spotAngle) * 0.58, 0.75 + Math.sin(spotIndex * 1.7) * 0.56, Math.sin(spotAngle) * 0.5);
+    aquariumSquidRoot.add(glowSpot);
+  }
+  const squidTentacleSegments = [];
+  for (let tentacleIndex = 0; tentacleIndex < 8; tentacleIndex++) {
+    const angle = (tentacleIndex / 8) * Math.PI * 2;
+    for (let segmentIndex = 0; segmentIndex < 6; segmentIndex++) {
+      const progress = segmentIndex / 5;
+      const radius = 0.42 + progress * (0.62 + (tentacleIndex % 3) * 0.12);
+      const segment = new THREE.Mesh(
+        new THREE.SphereGeometry(0.105 - segmentIndex * 0.009, 9, 7),
+        tentacleIndex % 2 === 0 ? squidAccentMaterial : squidMantleMaterial
+      );
+      segment.position.set(
+        Math.cos(angle) * radius,
+        -0.78 - segmentIndex * 0.28,
+        Math.sin(angle) * radius
+      );
+      aquariumSquidRoot.add(segment);
+      squidTentacleSegments.push({
+        mesh: segment,
+        angle,
+        tentacleIndex,
+        segmentIndex,
+        baseRadius: radius,
+        baseY: segment.position.y,
+      });
+    }
+  }
+  const aquariumSquid = {
+    root: aquariumSquidRoot,
+    mantle: squidMantle,
+    fins: aquariumSquidRoot.children.filter((child) => child.geometry?.type === 'ConeGeometry'),
+    tentacleSegments: squidTentacleSegments,
+    baseY: aquariumSquidRoot.position.y,
+    phase: 2.4,
+  };
+
+  const bubbleCount = isTouchDevice ? 44 : 76;
+  const bubblePositions = new Float32Array(bubbleCount * 3);
+  for (let index = 0; index < bubbleCount; index++) {
+    bubblePositions[index * 3] = -10.6 + ((index * 47) % 101) / 100 * 21.2;
+    bubblePositions[index * 3 + 1] = aquariumCenterY - 5.1 + ((index * 37) % 97) / 96 * 10.2;
+    bubblePositions[index * 3 + 2] = -1.15 + (index % 9) / 8 * 2.3;
+  }
+  const bubbleGeometry = new THREE.BufferGeometry();
+  bubbleGeometry.setAttribute('position', new THREE.BufferAttribute(bubblePositions, 3));
+  const bubbleMaterial = new THREE.PointsMaterial({
+    color: 0xc8fbff,
+    size: isTouchDevice ? 0.15 : 0.11,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const aquariumBubbles = new THREE.Points(bubbleGeometry, bubbleMaterial);
+  aquarium.add(aquariumBubbles);
+  const aquariumSpec = { name: 'PANORAMIC ALIEN OCEAN · EUROPA DEEP', accent: 0x5af4ff };
+  const aquariumPlaque = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.6, 1.12),
+    new THREE.MeshBasicMaterial({
+      map: makeMuseumPlaqueTexture(aquariumSpec, 9),
+      transparent: true,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    })
+  );
+  aquariumPlaque.position.set(0, 1.25, aquariumDepth * 0.5 + 0.28);
+  aquarium.add(aquariumPlaque);
+  const aquariumLabel = makeLabelSprite('PANORAMIC ALIEN OCEAN · SPACE SQUID HABITAT', '#8cffff');
+  aquariumLabel.position.set(0, 13.35, aquariumDepth * 0.5 + 0.16);
+  aquariumLabel.scale.set(8.4, 0.78, 1);
+  aquarium.add(aquariumLabel);
 
   const moteCount = isTouchDevice ? 70 : 120;
   const motePositions = new Float32Array(moteCount * 3);
   for (let index = 0; index < moteCount; index++) {
     const angle = index * 2.399963;
-    const radius = 3.8 + (index % 17) * 0.52;
+    const radius = 4.2 + (index % 22) * 0.67;
     motePositions[index * 3] = Math.cos(angle) * radius;
-    motePositions[index * 3 + 1] = 5.5 + (index % 23) * 0.72;
+    motePositions[index * 3 + 1] = 5.5 + (index % 27) * 0.82;
     motePositions[index * 3 + 2] = Math.sin(angle) * radius;
   }
   const moteGeometry = new THREE.BufferGeometry();
@@ -3230,24 +4399,29 @@ function buildMarsXenobiologyGlobe(hub) {
   const bioMotes = new THREE.Points(moteGeometry, moteMaterial);
   group.add(bioMotes);
 
-  const cyanLight = new THREE.PointLight(0x70f4ff, 4.4, 28, 2);
-  cyanLight.position.set(-7.5, 7.2, 0);
+  const cyanLight = new THREE.PointLight(0x70f4ff, 4.4, 52, 2);
+  cyanLight.position.set(-14.2, 10.8, 0);
   group.add(cyanLight);
-  const violetLight = new THREE.PointLight(0xc68aff, 3.8, 26, 2);
-  violetLight.position.set(7.5, 6.2, -1.5);
+  const violetLight = new THREE.PointLight(0xc68aff, 3.8, 50, 2);
+  violetLight.position.set(14.2, 9.8, -4.5);
   group.add(violetLight);
   const landmarkLabel = makeLabelSprite('ARES XENOBIOLOGY GLOBE · LIVING SPECIMENS', '#9effe7');
-  landmarkLabel.position.set(0, 32.4, 0);
-  landmarkLabel.scale.set(10.4, 1.28, 1);
+  landmarkLabel.position.set(0, 41.6, 0);
+  landmarkLabel.scale.set(13.2, 1.52, 1);
   group.add(landmarkLabel);
 
-  addCollider(hub.x, hub.z, 2.2);
   return {
     group,
     globe,
     globeMaterial,
     globeRibs,
     creatureRuntimes,
+    museumMonkey,
+    fishRuntimes,
+    aquariumSquid,
+    aquariumWater,
+    aquariumBubbles,
+    bubbleMaterial,
     bioMotes,
     moteMaterial,
     cyanLight,
@@ -4183,127 +5357,6 @@ HUBS.forEach((hub) => {
   if (hub.key === 'nightfall') hubRuntime[hub.key] = buildNightfallCave(hub);
 });
 setLoadingStage(63, 'LIGHTING THE UNDERMARS');
-
-/* ---------- proximity speaker stations ---------- */
-
-function buildSpeakerStation(station, stationIndex) {
-  const group = new THREE.Group();
-  group.name = `PA-${stationIndex + 1} ${station.name}`;
-  const darkMetal = stdMat(0x20251f, { metalness: 0.7, roughness: 0.42 });
-  const fieldGreen = stdMat(0x4d5941, { metalness: 0.48, roughness: 0.6 });
-  const blackCone = stdMat(0x080b08, { metalness: 0.16, roughness: 0.82, side: THREE.DoubleSide });
-  const canvasWebbing = stdMat(0x8f805e, { metalness: 0.04, roughness: 0.94 });
-  const accentMaterial = new THREE.MeshStandardMaterial({
-    color: station.color,
-    emissive: station.color,
-    emissiveIntensity: 0.75,
-    roughness: 0.32,
-    metalness: 0.28,
-  });
-
-  const footing = new THREE.Mesh(new THREE.CylinderGeometry(1.55, 1.8, 0.38, 10), darkMetal);
-  footing.position.y = 0.19;
-  group.add(footing);
-
-  const signalRing = new THREE.Mesh(new THREE.TorusGeometry(1.43, 0.055, 8, 36), accentMaterial);
-  signalRing.rotation.x = Math.PI / 2;
-  signalRing.position.y = 0.41;
-  group.add(signalRing);
-
-  [-1, 1].forEach((side) => {
-    [-0.74, 0, 0.74].forEach((z) => {
-      const sandbag = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.28, 0.48), canvasWebbing);
-      sandbag.position.set(side * 1.28, 0.5, z);
-      sandbag.rotation.y = side * 0.08 + z * 0.08;
-      group.add(sandbag);
-    });
-  });
-
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 4.55, 8), darkMetal);
-  mast.position.y = 2.65;
-  group.add(mast);
-
-  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.38, 1.25, 0.82), fieldGreen);
-  cabinet.position.set(0, 1.22, 0.12);
-  group.add(cabinet);
-
-  const cabinetDoor = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.82, 0.045), darkMetal);
-  cabinetDoor.position.set(0, 1.24, -0.43);
-  group.add(cabinetDoor);
-
-  const crossbar = new THREE.Mesh(new THREE.BoxGeometry(3.65, 0.2, 0.2), darkMetal);
-  crossbar.position.y = 4.55;
-  group.add(crossbar);
-
-  const speakerRims = [];
-  [-1.3, 0, 1.3].forEach((x, hornIndex) => {
-    const hornMount = new THREE.Group();
-    hornMount.position.set(x, 4.72, 0);
-    hornMount.rotation.y = (hornIndex - 1) * 0.22;
-
-    const horn = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.7, 1.35, 20, 1, true), fieldGreen);
-    horn.rotation.x = Math.PI / 2;
-    horn.position.z = -0.62;
-    hornMount.add(horn);
-
-    const hornInterior = new THREE.Mesh(new THREE.CircleGeometry(0.58, 24), blackCone);
-    hornInterior.position.z = -1.305;
-    hornMount.add(hornInterior);
-
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.065, 8, 28), accentMaterial);
-    rim.position.z = -1.32;
-    hornMount.add(rim);
-    speakerRims.push(rim);
-
-    const rearDriver = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.42, 14), darkMetal);
-    rearDriver.rotation.x = Math.PI / 2;
-    rearDriver.position.z = 0.18;
-    hornMount.add(rearDriver);
-    group.add(hornMount);
-  });
-
-  const equalizerBars = [];
-  [-0.34, 0, 0.34].forEach((x) => {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.08), accentMaterial);
-    bar.position.set(x, 1.25, -0.48);
-    group.add(bar);
-    equalizerBars.push(bar);
-  });
-
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.55, 6), darkMetal);
-  antenna.position.set(0.68, 5.75, 0.06);
-  group.add(antenna);
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), accentMaterial);
-  beacon.position.set(0.68, 6.56, 0.06);
-  group.add(beacon);
-
-  const light = new THREE.PointLight(station.color, 0.6, 13, 2);
-  light.position.y = 4.8;
-  group.add(light);
-
-  const labelColor = `#${station.color.toString(16).padStart(6, '0')}`;
-  const label = makeLabelSprite(`PA-${stationIndex + 1} · ${station.name}`, labelColor);
-  label.position.y = 6.95;
-  label.scale.set(5.1, 0.95, 1);
-  group.add(label);
-
-  placeSurfaceGroup(group, station.normal);
-  group.rotateY(stationIndex * 1.37 + 0.35);
-  addCollider(station.x, station.z, 1.9);
-
-  station.runtime = {
-    group,
-    accentMaterial,
-    signalRing,
-    equalizerBars,
-    speakerRims,
-    beacon,
-    light,
-  };
-  station.wasInRange = false;
-}
-
-SPEAKER_STATIONS.forEach(buildSpeakerStation);
 
 /* ---------- Mars–Moon shuttle infrastructure ---------- */
 
@@ -6846,7 +7899,7 @@ let footSpeed = 0;
 let footJumpHeight = 0;
 let footVerticalVelocity = 0;
 let footGrounded = true;
-const WALK_SPEED_BY_WORLD = { mars: 8.4, moon: 6.4, zephyra: 7.6 };
+const WALK_SPEED_BY_WORLD = { mars: 11.4, moon: 8.6, zephyra: 10.2 };
 const FOOT_THRUSTER_FUEL_MAX = 3.2;
 const ROVER_THRUSTER_FUEL_MAX = 5.5;
 let footThrusterFuel = FOOT_THRUSTER_FUEL_MAX;
@@ -6873,6 +7926,7 @@ const audioStateEl = document.getElementById('audio-state');
 let audioContext = null;
 let audioMasterGain = null;
 let ambientBusGain = null;
+let chillHopBusGain = null;
 let engineBusGain = null;
 let engineFilter = null;
 let engineOscillator = null;
@@ -6893,7 +7947,7 @@ function updateAudioIndicator() {
   audioStateEl.textContent = !audioStarted ? 'TAP TO START' : audioEnabled ? 'ON' : 'OFF';
   audioToggleEl.setAttribute(
     'aria-label',
-    !audioStarted ? 'Start Mars soundscape' : audioEnabled ? 'Mute Mars soundscape' : 'Enable Mars soundscape'
+    !audioStarted ? 'Start game soundtrack' : audioEnabled ? 'Mute game soundtrack' : 'Enable game soundtrack'
   );
 }
 
@@ -6970,30 +8024,22 @@ function createChillHopBuffer(context) {
   return buffer;
 }
 
-function buildSpeakerStationAudio(context, output) {
+function buildGlobalChillHopAudio(context, output) {
   const now = context.currentTime;
-  const stationInputs = [];
-  SPEAKER_STATIONS.forEach((station) => {
-    const proximityGain = context.createGain();
-    proximityGain.gain.setValueAtTime(0, now);
-    proximityGain.connect(output);
-    const panner = context.createStereoPanner ? context.createStereoPanner() : context.createGain();
-    panner.connect(proximityGain);
-    stationInputs.push(panner);
-    station.audio = { proximityGain, panner };
-  });
-
   const chillSource = context.createBufferSource();
   chillSource.buffer = createChillHopBuffer(context);
   chillSource.loop = true;
   const chillFilter = context.createBiquadFilter();
   chillFilter.type = 'lowpass';
-  chillFilter.frequency.setValueAtTime(2400, now);
-  chillFilter.Q.setValueAtTime(0.55, now);
-  const chillLevel = context.createGain();
-  chillLevel.gain.setValueAtTime(1.05, now);
-  chillSource.connect(chillFilter).connect(chillLevel);
-  stationInputs.forEach((input) => chillLevel.connect(input));
+  chillFilter.frequency.setValueAtTime(2100, now);
+  chillFilter.Q.setValueAtTime(0.48, now);
+  const chillWarmthFilter = context.createBiquadFilter();
+  chillWarmthFilter.type = 'highpass';
+  chillWarmthFilter.frequency.setValueAtTime(46, now);
+  chillWarmthFilter.Q.setValueAtTime(0.36, now);
+  chillHopBusGain = context.createGain();
+  chillHopBusGain.gain.setValueAtTime(0.12, now);
+  chillSource.connect(chillWarmthFilter).connect(chillFilter).connect(chillHopBusGain).connect(output);
   chillSource.start(now);
 }
 
@@ -7021,7 +8067,7 @@ function buildAudioSystem() {
   limiter.release.setValueAtTime(0.32, now);
   audioMasterGain.connect(limiter).connect(audioContext.destination);
 
-  buildSpeakerStationAudio(audioContext, audioMasterGain);
+  buildGlobalChillHopAudio(audioContext, audioMasterGain);
 
   ambientBusGain = audioContext.createGain();
   ambientBusGain.gain.setValueAtTime(0.052, now);
@@ -7156,7 +8202,7 @@ async function ensureMarsAudio() {
     audioMasterGain.gain.cancelScheduledValues(now);
     audioMasterGain.gain.setTargetAtTime(0.78, now, 0.22);
     updateAudioIndicator();
-    if (audioStarted && !wasStarted) showBanner('PA NETWORK ONLINE · MUSIC ACTIVE');
+    if (audioStarted && !wasStarted) showBanner('CHILLHOP SOUNDTRACK · PLAYING SOFTLY');
   } catch (error) {
     console.warn('Mars audio could not start:', error);
   }
@@ -7191,60 +8237,6 @@ function updateThrusterAudio(active, isRover, pulse) {
   thrusterNoiseFilter.frequency.setTargetAtTime((isRover ? 270 : 390) + pulseLevel * 240, now, 0.018);
   thrusterToneOscillator.frequency.setTargetAtTime((isRover ? 42 : 54) + pulseLevel * 18, now, 0.018);
   thrusterSubOscillator.frequency.setTargetAtTime((isRover ? 25 : 32) + pulseLevel * 11, now, 0.014);
-}
-
-const stationAudioTangent = new THREE.Vector3();
-const stationAudioRight = new THREE.Vector3();
-
-function updateSpeakerStations(time, listenerNormal, listenerHeading) {
-  let strongestSignal = 0;
-  const hasMarsListener = Boolean(listenerNormal && listenerHeading);
-  if (hasMarsListener) stationAudioRight.copy(listenerHeading).cross(listenerNormal).normalize();
-
-  SPEAKER_STATIONS.forEach((station, stationIndex) => {
-    const distance = hasMarsListener ? geodesicDistance(listenerNormal, station.normal) : Infinity;
-    const proximity = 1 - THREE.MathUtils.smoothstep(distance, 7.5, station.hearingRadius);
-    const signal = Math.pow(THREE.MathUtils.clamp(proximity, 0, 1), 1.45);
-    strongestSignal = Math.max(strongestSignal, signal);
-    station.proximity = proximity;
-
-    const pulse = 0.5 + Math.sin(time * (1.9 + stationIndex * 0.13) + stationIndex * 1.7) * 0.5;
-    const visualEnergy = 0.16 + signal * 0.84;
-    station.runtime.accentMaterial.emissiveIntensity = 0.38 + pulse * 0.16 + signal * 1.85;
-    station.runtime.light.intensity = 0.18 + pulse * 0.18 + signal * 2.7;
-    station.runtime.signalRing.scale.setScalar(1 + pulse * 0.018 + signal * 0.055);
-    station.runtime.beacon.scale.setScalar(0.86 + pulse * 0.18 + signal * 0.34);
-    station.runtime.equalizerBars.forEach((bar, barIndex) => {
-      const beat = 0.5 + Math.sin(time * (2.15 + barIndex * 0.34) + stationIndex + barIndex * 1.2) * 0.5;
-      bar.scale.y = 0.45 + beat * (0.28 + visualEnergy * 0.9);
-    });
-    station.runtime.speakerRims.forEach((rim, rimIndex) => {
-      const throb = Math.max(0, Math.sin(time * (2.4 + stationIndex * 0.08) + rimIndex * 0.7));
-      rim.scale.setScalar(1 + throb * signal * 0.045);
-    });
-
-    if (station.audio && audioStarted && audioEnabled && audioContext.state === 'running') {
-      const now = audioContext.currentTime;
-      const targetGain = signal > 0.0005 ? signal * 0.22 : 0;
-      station.audio.proximityGain.gain.setTargetAtTime(targetGain, now, signal > 0 ? 0.16 : 0.28);
-      if (hasMarsListener && station.audio.panner.pan) {
-        stationAudioTangent.copy(station.normal).addScaledVector(listenerNormal, -station.normal.dot(listenerNormal)).normalize();
-        const pan = THREE.MathUtils.clamp(stationAudioTangent.dot(stationAudioRight), -0.82, 0.82);
-        station.audio.panner.pan.setTargetAtTime(pan, now, 0.14);
-      }
-    }
-
-    if (proximity > 0.16 && !station.wasInRange) {
-      station.wasInRange = true;
-      showBanner(audioStarted ? `PA BROADCAST ACQUIRED · ${station.name}` : 'TAP AUDIO · PA MUSIC IN RANGE');
-    } else if (proximity < 0.025) {
-      station.wasInRange = false;
-    }
-  });
-
-  if (ambientBusGain && audioStarted && audioEnabled && audioContext.state === 'running') {
-    ambientBusGain.gain.setTargetAtTime(0.052 - strongestSignal * 0.03, audioContext.currentTime, 0.35);
-  }
 }
 
 audioToggleEl.addEventListener('click', () => {
@@ -7369,6 +8361,8 @@ caveWarpButtonEl.addEventListener('click', (e) => {
 
 const PORTFOLIO_HUB_KEY = 'outpost';
 const PORTFOLIO_REVEAL_RADIUS = 11.5 * PROJECT_SHIP_SCALE;
+const PROJECT_INTERIOR_ENTER_RADIUS = 10.8;
+const PROJECT_INTERIOR_EXIT_RADIUS = 12.6;
 let ufoInteriorActive = false;
 let ufoProjectScreensRequested = false;
 const projectRampCenterNormal = new THREE.Vector3();
@@ -7399,6 +8393,52 @@ function projectRampDeckLift(normal) {
   if (lateralDistance > ramp.halfWidth + 0.24) return 0;
   const terrainContact = THREE.MathUtils.smoothstep(routeRatio, 0, 0.46);
   return THREE.MathUtils.lerp(ramp.startLift, ramp.endLift, terrainContact);
+}
+
+function projectArchiveFloorLift(normal) {
+  if (!normal) return 0;
+  const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const distance = arcDistanceForWorld('mars', normal, portfolioHub.normal);
+  const insideBlend = 1 - THREE.MathUtils.smoothstep(distance, 11.2, 15.2);
+  if (insideBlend <= 0) return 0;
+  const localSurfaceRadius = PLANET_RADIUS + getSurfaceHeight(portfolioHub.normal);
+  const clampedDistance = Math.min(distance, localSurfaceRadius - 0.001);
+  const curvatureDrop = localSurfaceRadius
+    - Math.sqrt(Math.max(0, localSurfaceRadius * localSurfaceRadius - clampedDistance * clampedDistance));
+  return (3.06 + curvatureDrop) * insideBlend;
+}
+
+function updatePhysicalUfoInteriorState() {
+  if (travelMode !== 'walking' || currentWorld !== 'mars') return;
+  const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const distance = arcDistanceForWorld('mars', footNormal, portfolioHub.normal);
+  if (!ufoInteriorActive && distance < PROJECT_INTERIOR_ENTER_RADIUS) {
+    ufoInteriorActive = true;
+    hubRuntime.outpost.saucer.visible = false;
+    hubRuntime.outpost.archiveLabel.visible = false;
+    hubRuntime.outpost.entryFrame.visible = false;
+    loadUfoProjectScreens();
+    showBanner("PROJECT ARCHIVE ENTERED · WALK FREELY · CLICK A SCREEN");
+  } else if (ufoInteriorActive && distance > PROJECT_INTERIOR_EXIT_RADIUS) {
+    setHoveredProjectScreen(null);
+    ufoInteriorActive = false;
+    hubRuntime.outpost.saucer.visible = true;
+    hubRuntime.outpost.archiveLabel.visible = true;
+    hubRuntime.outpost.entryFrame.visible = true;
+    showBanner('UFO HATCH CROSSED · RETURNED TO MARS');
+  }
+}
+
+function xenobiologyMuseumFloorLift(normal) {
+  if (!normal) return 0;
+  const distance = arcDistanceForWorld('mars', normal, xenobiologyTrailHub.normal);
+  const insideBlend = 1 - THREE.MathUtils.smoothstep(distance, 25.3, 29.1);
+  if (insideBlend <= 0) return 0;
+  const localSurfaceRadius = PLANET_RADIUS + getSurfaceHeight(xenobiologyTrailHub.normal);
+  const clampedDistance = Math.min(distance, localSurfaceRadius - 0.001);
+  const curvatureDrop = localSurfaceRadius
+    - Math.sqrt(Math.max(0, localSurfaceRadius * localSurfaceRadius - clampedDistance * clampedDistance));
+  return (0.68 + curvatureDrop) * insideBlend;
 }
 
 function loadUfoProjectScreens() {
@@ -7479,34 +8519,21 @@ renderer.domElement.addEventListener('click', (event) => {
 function enterUfoInterior() {
   if (travelMode !== 'walking' || !isNearUfoEntry(footNormal)) return;
   ufoInteriorActive = true;
-  footSpeed = 0;
-  footJumpHeight = 0;
-  footVerticalVelocity = 0;
-  footGrounded = true;
-  footRoot.visible = false;
-  alienDriver.thrusterFlames.visible = false;
-  hubRuntime.outpost.interiorGallery.visible = true;
+  hubRuntime.outpost.saucer.visible = false;
+  hubRuntime.outpost.archiveLabel.visible = false;
+  hubRuntime.outpost.entryFrame.visible = false;
   loadUfoProjectScreens();
-  showBanner("PROJECT ARCHIVE ONLINE · CAITLIN'S SCREENS RESTORED");
+  showBanner("PROJECT ARCHIVE ONLINE · WALK INSIDE AND SELECT A SCREEN");
 }
 
 function exitUfoInterior() {
   if (!ufoInteriorActive) return;
   setHoveredProjectScreen(null);
   ufoInteriorActive = false;
-  hubRuntime.outpost.interiorGallery.visible = false;
-  const portfolioHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
-  const towardLanding = START_NORMAL.clone()
-    .addScaledVector(portfolioHub.normal, -START_NORMAL.dot(portfolioHub.normal))
-    .normalize();
-  footNormal.copy(stepWorldNormal(portfolioHub.normal, towardLanding, 10.5 * PROJECT_SHIP_SCALE, PLANET_RADIUS));
-  footHeading.copy(portfolioHub.normal)
-    .addScaledVector(footNormal, -portfolioHub.normal.dot(footNormal))
-    .normalize();
-  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, projectRampDeckLift(footNormal) + 0.04));
-  orientSurfaceRoot(footRoot, footNormal, footHeading);
-  footRoot.visible = true;
-  showBanner('UFO HATCH OPEN · RETURNED TO MARS');
+  hubRuntime.outpost.saucer.visible = true;
+  hubRuntime.outpost.archiveLabel.visible = true;
+  hubRuntime.outpost.entryFrame.visible = true;
+  showBanner('WALK BACK THROUGH THE OPEN HATCH TO EXIT');
 }
 
 /* ---------- HUD ---------- */
@@ -7545,6 +8572,7 @@ const gravityValueEl = document.getElementById('gravity-value');
 const interactionPromptEl = document.getElementById('interaction-prompt');
 const shuttleStatusEl = document.getElementById('shuttle-status');
 const shuttleStatusTextEl = document.getElementById('shuttle-status-text');
+const shuttleCountdownValueEl = document.getElementById('shuttle-countdown-value');
 const shuttleRouteBusEl = document.getElementById('shuttle-route-bus');
 const travelBasisRight = new THREE.Vector3();
 const travelBasisBack = new THREE.Vector3();
@@ -8325,11 +9353,12 @@ function handleInteraction() {
 
   if (travelMode !== 'walking') return;
   if (ufoInteriorActive) {
-    exitUfoInterior();
+    showBanner('PROJECT ARCHIVE · WALK BACK THROUGH THE OPEN HATCH TO EXIT');
     return;
   }
   if (currentWorld === 'mars' && isNearUfoEntry(footNormal)) {
-    enterUfoInterior();
+    loadUfoProjectScreens();
+    showBanner('OPEN HATCH AHEAD · WALK UP THE RAMP TO ENTER');
     return;
   }
   if (isNearHyperBike(footNormal)) {
@@ -8383,12 +9412,6 @@ function shuttleEtaToWorld(world) {
   }
   if (shuttleLocation === world) return 0;
   return shuttleDockTimer + SHUTTLE_TRAVEL_DURATION;
-}
-
-function isPlayerNearLandedShuttle() {
-  if (travelMode === 'boarded') return true;
-  if (shuttleTransit || shuttleLocation !== currentWorld) return false;
-  return isPlayerNearCurrentShuttlePad();
 }
 
 function isPlayerNearCurrentShuttlePad(radius = SHUTTLE_STATUS_RADIUS) {
@@ -8463,16 +9486,11 @@ function updateShuttleFlight(dt, time) {
 }
 
 function updateOnFoot(dt, time, throttleInput, steeringInput) {
-  if (ufoInteriorActive) {
-    footSpeed = 0;
-    footJumpHeight = 0;
-    footVerticalVelocity = 0;
-    footGrounded = true;
-    jumpQueued = false;
-    footThrusterWasActive = false;
-    alienDriver.thrusterFlames.visible = false;
-    updateThrusterAudio(false, false, 0);
-    return;
+  if (performanceQuery?.has('ufo-cabin-static-qa')) {
+    throttleInput = 0;
+    steeringInput = 0;
+    keys.w = false;
+    keys.arrowup = false;
   }
   const radius = currentWorld === 'moon' ? MOON_RADIUS : currentWorld === 'zephyra' ? ZEPHYRA_RADIUS : PLANET_RADIUS;
   const walkTarget = throttleInput * (WALK_SPEED_BY_WORLD[currentWorld] || WALK_SPEED_BY_WORLD.mars);
@@ -8545,9 +9563,13 @@ function updateOnFoot(dt, time, throttleInput, steeringInput) {
     footThrusterFuel = Math.min(FOOT_THRUSTER_FUEL_MAX, footThrusterFuel + dt * 1.8);
   }
 
-  const walkableRampLift = currentWorld === 'mars' ? projectRampDeckLift(footNormal) : 0;
-  footRoot.position.copy(surfacePositionForWorld(currentWorld, footNormal, walkableRampLift + footJumpHeight + 0.04));
+  const walkableSurfaceLift = currentWorld === 'mars'
+    ? Math.max(projectRampDeckLift(footNormal), projectArchiveFloorLift(footNormal))
+      + xenobiologyMuseumFloorLift(footNormal)
+    : 0;
+  footRoot.position.copy(surfacePositionForWorld(currentWorld, footNormal, walkableSurfaceLift + footJumpHeight + 0.04));
   orientSurfaceRoot(footRoot, footNormal, footHeading);
+  updatePhysicalUfoInteriorState();
   if (currentWorld === 'moon' && footGrounded && Math.abs(footSpeed) > 0.32) {
     moonFootprintTravel += Math.abs(footSpeed) * dt;
     if (moonFootprintTravel >= 0.68) {
@@ -8590,7 +9612,10 @@ function updateTravelPrompt() {
     else if (caveTravelZone === 'chamber') setInteractionPrompt(`MORROW: ${hubRuntime.nightfall.bearActivity.toUpperCase()} · R OR BUTTON TO WARP HOME`);
     else if (drivingCoursePrompt) setInteractionPrompt(`${drivingCoursePrompt} · E EXIT`);
     else if (arcDistanceForWorld('mars', playerNormal, GARAGE_NORMAL) < 34) {
-      setInteractionPrompt(`${drivingCourses.courses.length} MARS COURSES · FOLLOW COLORED SKY BEACONS · E EXIT`);
+      setInteractionPrompt(`${drivingCourses.courses.length} MARS COURSE${drivingCourses.courses.length === 1 ? '' : 'S'} · FOLLOW COLORED SKY BEACONS · E EXIT`);
+    }
+    else if (arcDistanceForWorld('mars', playerNormal, START_NORMAL) < 8.5) {
+      setInteractionPrompt('SHUTTLE ARRIVES IN 10 SECONDS · WATCH TOP-RIGHT COUNTDOWN · E EXIT');
     }
     else setInteractionPrompt(Math.abs(driveSpeed) < (activeProfile?.exitSpeed || 1.2) && grounded
       ? `E · EXIT ${activeVehicle?.label || 'VEHICLE'}`
@@ -8617,12 +9642,12 @@ function updateTravelPrompt() {
   }
   if (ufoInteriorActive) {
     setInteractionPrompt(hoveredProjectScreen
-      ? `CLICK · OPEN ${hoveredProjectScreen.project.title.toUpperCase()} LIVE  /  E · EXIT`
-      : 'E · EXIT CRASHED UFO  /  CLICK ANY PROJECT SCREEN');
+      ? `CLICK · OPEN ${hoveredProjectScreen.project.title.toUpperCase()} LIVE`
+      : 'WASD · WALK INSIDE  /  CLICK ANY PROJECT SCREEN  /  WALK OUT THE HATCH');
     return;
   }
   if (currentWorld === 'mars' && isNearUfoEntry(footNormal)) {
-    setInteractionPrompt("E · ENTER CAITLIN'S PROJECT ARCHIVE");
+    setInteractionPrompt("WALK UP THE RAMP · ENTER THE OPEN PROJECT ARCHIVE HATCH");
     return;
   }
   if (isNearHyperBike(footNormal)) {
@@ -8644,6 +9669,8 @@ function updateTravelPrompt() {
     setInteractionPrompt(`E · BOARD SPACE BUS · LEAVES ${Math.max(1, Math.ceil(shuttleDockTimer))} SEC`);
   } else if (nearPad) {
     setInteractionPrompt(`SPACE BUS RETURNS · ${Math.max(1, Math.ceil(shuttleEtaToWorld(currentWorld)))} SEC`);
+  } else if (currentWorld === 'mars' && arcDistanceForWorld('mars', footNormal, START_NORMAL) < 8.5) {
+    setInteractionPrompt('SHUTTLE ARRIVES IN 10 SECONDS · WATCH TOP-RIGHT COUNTDOWN');
   } else {
     const nearbyVehicle = currentWorld === 'mars' ? findNearestBoardableVehicle(footNormal) : null;
     setInteractionPrompt(nearbyVehicle
@@ -9042,10 +10069,10 @@ const worldDetailObjects = {
     marsImpactBasinRuntime.group,
     marsImpactBasinRuntime.landmarkLabel,
     ...Object.values(hubRuntime).map((runtime) => runtime.group),
-    ...SPEAKER_STATIONS.map((station) => station.runtime.group),
     marsLandingPad.group,
     rockGarage.root,
     drivingCourses.root,
+    oasisLake.root,
     ...vehicleRuntimes.map((runtime) => runtime.root),
     wheelDust,
   ],
@@ -9305,27 +10332,89 @@ if (performanceQuery.has('ufo-ramp-qa')) {
   lookingAtCamera = false;
   keys.w = true;
 }
-if (performanceQuery.has('planetarium-qa') || performanceQuery.has('xenobiology-qa')) {
+if (performanceQuery.has('ufo-hatch-qa')) {
+  const shopHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const hatchApproach = START_NORMAL.clone()
+    .addScaledVector(shopHub.normal, -START_NORMAL.dot(shopHub.normal))
+    .normalize();
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  ufoInteriorActive = false;
+  hubRuntime.outpost.saucer.visible = true;
+  footNormal.copy(stepWorldNormal(shopHub.normal, hatchApproach, 15.8, PLANET_RADIUS));
+  footHeading.copy(shopHub.normal)
+    .addScaledVector(footNormal, -shopHub.normal.dot(footNormal))
+    .normalize();
+  const hatchDeckLift = Math.max(projectRampDeckLift(footNormal), projectArchiveFloorLift(footNormal));
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, hatchDeckLift + 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  footSpeed = 0;
+  keys.w = false;
+  keys.arrowup = false;
+  lookingAtCamera = false;
+}
+if (
+  performanceQuery.has('planetarium-qa')
+  || performanceQuery.has('xenobiology-qa')
+  || performanceQuery.has('xenobiology-interior-qa')
+  || performanceQuery.has('aquarium-qa')
+) {
   const planetariumHub = HUBS.find((hub) => hub.key === 'planetarium');
   const planetariumApproach = START_NORMAL.clone()
     .addScaledVector(planetariumHub.normal, -START_NORMAL.dot(planetariumHub.normal))
     .normalize();
   currentWorld = 'mars';
   travelMode = 'walking';
-  footNormal.copy(stepWorldNormal(planetariumHub.normal, planetariumApproach, 34, PLANET_RADIUS));
-  footHeading.copy(planetariumHub.normal)
-    .addScaledVector(footNormal, -planetariumHub.normal.dot(footNormal))
+  const museumApproachDistance = performanceQuery.has('aquarium-qa')
+    ? -4.8
+    : performanceQuery.has('xenobiology-interior-qa') ? 4.2 : 34;
+  footNormal.copy(stepWorldNormal(planetariumHub.normal, planetariumApproach, museumApproachDistance, PLANET_RADIUS));
+  const museumFocusNormal = performanceQuery.has('aquarium-qa')
+    ? stepWorldNormal(planetariumHub.normal, planetariumApproach, -19.6, PLANET_RADIUS)
+    : planetariumHub.normal;
+  footHeading.copy(museumFocusNormal)
+    .addScaledVector(footNormal, -museumFocusNormal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, xenobiologyMuseumFloorLift(footNormal) + 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  lookingAtCamera = false;
+}
+if (performanceQuery.has('oasis-lake-qa')) {
+  currentWorld = 'mars';
+  travelMode = 'walking';
+  footNormal.copy(oasisTrailNormal);
+  footHeading.copy(MARS_OASIS_NORMAL)
+    .addScaledVector(footNormal, -MARS_OASIS_NORMAL.dot(footNormal))
     .normalize();
   footRoot.position.copy(surfacePositionForWorld('mars', footNormal, 0.04));
   orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
   lookingAtCamera = false;
 }
-if (performanceQuery.has('ufo-archive-qa')) {
+if (performanceQuery.has('ufo-archive-qa') || performanceQuery.has('ufo-cabin-static-qa')) {
+  const shopHub = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY);
+  const shopApproach = START_NORMAL.clone()
+    .addScaledVector(shopHub.normal, -START_NORMAL.dot(shopHub.normal))
+    .normalize();
   currentWorld = 'mars';
   travelMode = 'walking';
   ufoInteriorActive = true;
-  footRoot.visible = false;
-  hubRuntime.outpost.interiorGallery.visible = true;
+  hubRuntime.outpost.saucer.visible = false;
+  hubRuntime.outpost.archiveLabel.visible = false;
+  hubRuntime.outpost.entryFrame.visible = false;
+  footNormal.copy(stepWorldNormal(shopHub.normal, shopApproach, 6.4, PLANET_RADIUS));
+  footHeading.copy(shopHub.normal)
+    .addScaledVector(footNormal, -shopHub.normal.dot(footNormal))
+    .normalize();
+  footRoot.position.copy(surfacePositionForWorld('mars', footNormal, projectArchiveFloorLift(footNormal) + 0.04));
+  orientSurfaceRoot(footRoot, footNormal, footHeading);
+  footRoot.visible = true;
+  footSpeed = 0;
+  keys.w = false;
+  keys.arrowup = false;
+  lookingAtCamera = false;
   loadUfoProjectScreens();
 }
 if (performanceQuery.has('walk-audio-qa')) keys.w = true;
@@ -9609,14 +10698,12 @@ function animate() {
   if (worldDetailResidency.moon) updateMoonFootDust(dt);
 
   const activeMarsNormal = travelMode === 'driving' && caveTravelZone === 'surface' ? playerNormal : travelMode === 'walking' && currentWorld === 'mars' ? footNormal : null;
-  const activeMarsHeading = travelMode === 'driving' && caveTravelZone === 'surface' ? playerHeading : travelMode === 'walking' && currentWorld === 'mars' ? footHeading : null;
   const activeMarsAltitude = travelMode === 'driving' ? jumpHeight : travelMode === 'walking' && currentWorld === 'mars' ? footJumpHeight : 0;
   const activeMoonNormal = travelMode === 'walking' && currentWorld === 'moon' ? footNormal : null;
   const activeZephyraNormal = travelMode === 'walking' && currentWorld === 'zephyra' ? footNormal : null;
   const caveSurfaceDistance = activeMarsNormal ? geodesicDistance(activeMarsNormal, NIGHTFALL_CAVE.normal) : Infinity;
   const caveShouldRender = caveTravelZone !== 'surface' || caveSurfaceDistance < 56;
   if (hubRuntime.nightfall.group.visible !== caveShouldRender) hubRuntime.nightfall.group.visible = caveShouldRender;
-  updateSpeakerStations(t, activeMarsNormal, activeMarsHeading);
   updateLunarLighting(dt, t);
   environmentUpdateAccumulator += dt;
   if (environmentUpdateAccumulator >= environmentUpdateInterval) {
@@ -9627,6 +10714,7 @@ function animate() {
       updateMarsSedimentaryEscarpment(environmentDt, t, activeMarsNormal);
       updateMarsYardangField(environmentDt, t, activeMarsNormal);
       updateMarsImpactBasin(environmentDt, t, activeMarsNormal);
+      updateOasisLake(environmentDt, t);
     }
     if (worldDetailResidency.moon) {
       updateMoonCommandCenter(environmentDt, t, activeMoonNormal);
@@ -9663,7 +10751,9 @@ function animate() {
     });
     downedUfo.interiorLight.intensity = 2.5 + Math.sin(t * 12.7) * 0.85 + Math.sin(t * 31) * 0.28;
     downedUfo.breachGlow.material.opacity = 0.54 + Math.sin(t * 8.4) * 0.18;
-    downedUfo.archiveLight.intensity = 4.6 + Math.sin(t * 2.4) * 0.9;
+    downedUfo.archiveLight.intensity = 3.3 + Math.sin(t * 2.4) * 0.6;
+    downedUfo.glassCanopy.material.emissiveIntensity = 0.32 + Math.sin(t * 0.85) * 0.08;
+    downedUfo.canopyCrown.rotation.y += dt * 0.14;
     downedUfo.projectScreens.forEach((screen, index) => {
       const pulse = 0.82 + Math.sin(t * 3.2 + index * 1.3) * 0.18;
       screen.statusLight.scale.setScalar(pulse);
@@ -9700,14 +10790,108 @@ function animate() {
 
     const xenobiologyGlobe = hubRuntime.planetarium;
     xenobiologyGlobe.creatureRuntimes.forEach((creature, index) => {
-      const creaturePulse = t * (creature.type === 'jelly' ? 1.8 : 2.7) + creature.phase;
-      creature.group.position.y = creature.baseY + Math.sin(creaturePulse) * (creature.type === 'jelly' ? 0.22 : 0.06);
-      creature.group.rotation.y += dt * (creature.type === 'snail' ? 0.08 : 0.22 + index * 0.018);
+      const creaturePulse = t * (creature.type === 'jelly' || creature.type === 'butterfly' ? 1.8 : 2.7) + creature.phase;
+      const hopAmount = creature.type === 'bunny' ? Math.max(0, Math.sin(creaturePulse)) * 0.16 : 0;
+      creature.group.position.y = creature.baseY
+        + Math.sin(creaturePulse) * (creature.type === 'jelly' || creature.type === 'butterfly' ? 0.22 : 0.045)
+        + hopAmount;
+      creature.group.rotation.y += dt * (
+        creature.type === 'snail' ? 0.08
+          : creature.type === 'snake' || creature.type === 'tiger' ? 0.13
+            : creature.type === 'butterfly' ? 0.11
+              : 0.19 + index * 0.015
+      );
       creature.body.scale.y = creature.bodyBaseScaleY * (1 + Math.sin(creaturePulse * 1.35) * 0.018);
       creature.wings.forEach((wing) => {
         wing.mesh.rotation.z = wing.side * (0.42 + Math.sin(t * 18 + creature.phase) * 0.22);
       });
+      creature.segments.forEach((segment) => {
+        segment.mesh.position.x = segment.baseX + Math.sin(t * 3.2 + segment.index * 0.86 + creature.phase) * 0.11;
+        segment.mesh.position.y = segment.baseY + Math.cos(t * 2.7 + segment.index * 0.68 + creature.phase) * 0.035;
+      });
+      creature.ears.forEach((ear) => {
+        ear.mesh.rotation.z = ear.baseRotation + ear.side * Math.sin(t * 2.4 + creature.phase) * 0.055;
+      });
+      creature.tailSegments.forEach((segment) => {
+        segment.mesh.position.x = segment.baseX + Math.sin(t * 3 + segment.index * 0.54 + creature.phase) * (0.035 + segment.index * 0.012);
+        segment.mesh.position.y = segment.baseY + Math.cos(t * 2.5 + segment.index * 0.4 + creature.phase) * 0.025;
+      });
     });
+    const museumMonkey = xenobiologyGlobe.museumMonkey;
+    let monkeyMoving = false;
+    if (museumMonkey.pause > 0) {
+      museumMonkey.pause = Math.max(0, museumMonkey.pause - dt);
+    } else {
+      const monkeyTarget = museumMonkey.waypoints[museumMonkey.waypointIndex];
+      museumMonkey.toWaypoint.copy(monkeyTarget).sub(museumMonkey.root.position);
+      museumMonkey.toWaypoint.y = 0;
+      const monkeyDistance = museumMonkey.toWaypoint.length();
+      if (monkeyDistance < 0.34) {
+        museumMonkey.waypointIndex = (museumMonkey.waypointIndex + 1) % museumMonkey.waypoints.length;
+        museumMonkey.pause = 0.8 + Math.abs(Math.sin(t * 0.73 + museumMonkey.phase)) * 2.2;
+      } else {
+        monkeyMoving = true;
+        museumMonkey.toWaypoint.multiplyScalar(1 / monkeyDistance);
+        museumMonkey.root.position.addScaledVector(museumMonkey.toWaypoint, museumMonkey.speed * dt);
+        const monkeyYaw = Math.atan2(-museumMonkey.toWaypoint.x, -museumMonkey.toWaypoint.z);
+        museumMonkey.root.rotation.y = THREE.MathUtils.damp(museumMonkey.root.rotation.y, monkeyYaw, 5.5, dt);
+      }
+    }
+    const monkeyStride = monkeyMoving ? Math.sin(t * 7.2 + museumMonkey.phase) : 0;
+    museumMonkey.root.position.y = 0.7 + Math.abs(monkeyStride) * 0.035;
+    museumMonkey.arms.forEach((arm) => {
+      arm.pivot.rotation.x = THREE.MathUtils.damp(arm.pivot.rotation.x, monkeyStride * arm.side * 0.62, 9, dt);
+    });
+    museumMonkey.legs.forEach((leg) => {
+      leg.pivot.rotation.x = THREE.MathUtils.damp(leg.pivot.rotation.x, monkeyStride * leg.side * -0.58, 10, dt);
+    });
+    museumMonkey.head.rotation.y = Math.sin(t * 0.82 + museumMonkey.phase) * 0.18;
+    museumMonkey.head.rotation.z = Math.sin(t * 1.17 + museumMonkey.phase) * 0.045;
+    museumMonkey.torso.rotation.z = monkeyMoving ? -monkeyStride * 0.025 : Math.sin(t * 0.9) * 0.012;
+    museumMonkey.tailSegments.forEach((segment) => {
+      segment.mesh.position.x = segment.baseX
+        + Math.sin(t * 2.8 + segment.index * 0.55 + museumMonkey.phase) * (0.04 + segment.index * 0.018);
+      segment.mesh.position.y = segment.baseY
+        + Math.cos(t * 2.25 + segment.index * 0.42 + museumMonkey.phase) * (0.018 + segment.index * 0.006);
+    });
+
+    xenobiologyGlobe.fishRuntimes.forEach((fishRuntime) => {
+      const swimPhase = t * fishRuntime.speed + fishRuntime.phase;
+      const swimDirection = Math.cos(swimPhase) * fishRuntime.speed;
+      fishRuntime.fish.position.x = Math.sin(swimPhase) * fishRuntime.range;
+      fishRuntime.fish.position.y = fishRuntime.baseY + Math.sin(t * 1.7 + fishRuntime.phase) * 0.28;
+      fishRuntime.fish.position.z = fishRuntime.baseZ + Math.cos(swimPhase * 0.7) * 0.34;
+      fishRuntime.fish.rotation.y = swimDirection >= 0 ? 0 : Math.PI;
+      fishRuntime.fish.rotation.z = Math.sin(t * 2.1 + fishRuntime.phase) * 0.06;
+      fishRuntime.tail.rotation.x = Math.sin(t * 7.5 + fishRuntime.phase) * 0.26;
+    });
+    const aquariumSquid = xenobiologyGlobe.aquariumSquid;
+    const squidSwimPhase = t * 0.42 + aquariumSquid.phase;
+    aquariumSquid.root.position.x = Math.sin(squidSwimPhase) * 4.6;
+    aquariumSquid.root.position.y = aquariumSquid.baseY + Math.sin(t * 0.9 + aquariumSquid.phase) * 0.46;
+    aquariumSquid.root.position.z = 0.62 + Math.cos(squidSwimPhase * 1.3) * 0.24;
+    aquariumSquid.root.rotation.y = Math.sin(squidSwimPhase * 0.7) * 0.28;
+    aquariumSquid.root.rotation.z = Math.sin(t * 0.66 + aquariumSquid.phase) * 0.08;
+    aquariumSquid.mantle.scale.y = 1.5 * (1 + Math.sin(t * 2.2 + aquariumSquid.phase) * 0.075);
+    aquariumSquid.fins.forEach((fin, finIndex) => {
+      fin.rotation.y = Math.sin(t * 2.6 + finIndex * Math.PI + aquariumSquid.phase) * 0.24;
+    });
+    aquariumSquid.tentacleSegments.forEach((segment) => {
+      const wave = Math.sin(
+        t * 3.15
+        + segment.tentacleIndex * 0.83
+        - segment.segmentIndex * 0.72
+        + aquariumSquid.phase
+      );
+      const tentacleAngle = segment.angle + wave * (0.08 + segment.segmentIndex * 0.022);
+      const radius = segment.baseRadius + wave * (0.035 + segment.segmentIndex * 0.018);
+      segment.mesh.position.x = Math.cos(tentacleAngle) * radius;
+      segment.mesh.position.z = Math.sin(tentacleAngle) * radius;
+      segment.mesh.position.y = segment.baseY + Math.cos(t * 2.6 + segment.segmentIndex * 0.62 + segment.tentacleIndex) * 0.075;
+    });
+    xenobiologyGlobe.aquariumWater.rotation.y = Math.sin(t * 0.3) * 0.006;
+    xenobiologyGlobe.aquariumBubbles.rotation.y = Math.sin(t * 0.22) * 0.045;
+    xenobiologyGlobe.bubbleMaterial.opacity = 0.62 + Math.sin(t * 1.45) * 0.1;
     xenobiologyGlobe.bioMotes.rotation.y += dt * 0.018;
     xenobiologyGlobe.moteMaterial.opacity = 0.48 + Math.sin(t * 0.9) * 0.09;
     xenobiologyGlobe.globeMaterial.emissiveIntensity = 0.34 + Math.sin(t * 0.72) * 0.07;
@@ -9802,9 +10986,13 @@ function animate() {
     }
   } else if (travelMode === 'walking') {
     if (ufoInteriorActive) {
-      desiredCamPos = downedUfo.interiorCameraAnchor.getWorldPosition(new THREE.Vector3());
-      desiredTarget = downedUfo.interiorLookAnchor.getWorldPosition(new THREE.Vector3());
-      desiredCameraUp = HUBS.find((hub) => hub.key === PORTFOLIO_HUB_KEY).normal;
+      desiredCamPos = footRoot.position.clone()
+        .addScaledVector(footNormal, lookingAtCamera ? 4.15 : 4.8)
+        .addScaledVector(footHeading, lookingAtCamera ? 6.2 : -7.8);
+      desiredTarget = footRoot.position.clone()
+        .addScaledVector(footNormal, 1.8)
+        .addScaledVector(footHeading, lookingAtCamera ? -0.4 : 3.2);
+      desiredCameraUp = footNormal;
     } else {
       const interiorCameraBlend = Math.max(caveDarkness, moonCommandInterior);
       const garageCameraDistance = currentWorld === 'mars'
@@ -9913,7 +11101,7 @@ function animate() {
   } else if (ufoInteriorActive) {
     locationLabelEl.textContent = "CAITLIN'S PROJECT ARCHIVE · UFO INTERIOR";
     gravityValueEl.textContent = '0.38 G';
-    controlsHintEl.textContent = 'SELECT A PROJECT SCREEN TO OPEN IT · E exit crashed UFO';
+    controlsHintEl.textContent = 'WASD / ARROWS explore cabin · CLICK a project screen · WALK OUT through hatch';
   } else {
     const locationWorld = travelMode === 'boarded' ? shuttleLocation : travelMode === 'hyperbike' ? hyperBikeLocation : currentWorld;
     locationLabelEl.textContent = locationWorld === 'moon'
@@ -9961,18 +11149,19 @@ function animate() {
 
   if (shuttleTransit) {
     const eta = Math.max(0, Math.ceil(shuttleTransit.duration - shuttleTransit.elapsed));
-    shuttleStatusTextEl.textContent = `SPACE BUS · TO ${shuttleTransit.to.toUpperCase()} ${eta} SEC`;
+    shuttleStatusTextEl.textContent = `${shuttleTransit.from.toUpperCase()} → ${shuttleTransit.to.toUpperCase()} · ARRIVES`;
+    shuttleCountdownValueEl.textContent = String(eta).padStart(2, '0');
     const routeProgress = THREE.MathUtils.clamp(shuttleTransit.elapsed / shuttleTransit.duration, 0, 1);
     const marsToMoonProgress = shuttleTransit.from === 'mars' ? routeProgress : 1 - routeProgress;
     shuttleRouteBusEl.style.left = `${marsToMoonProgress * 100}%`;
     shuttleStatusEl.classList.remove('urgent');
   } else {
     const remaining = Math.max(1, Math.ceil(shuttleDockTimer));
-    shuttleStatusTextEl.textContent = `SPACE BUS · DEPARTS IN ${remaining} SEC`;
+    shuttleStatusTextEl.textContent = `${shuttleLocation.toUpperCase()} PAD · DEPARTS`;
+    shuttleCountdownValueEl.textContent = String(remaining).padStart(2, '0');
     shuttleRouteBusEl.style.left = shuttleLocation === 'mars' ? '0%' : '100%';
     shuttleStatusEl.classList.toggle('urgent', remaining <= 3);
   }
-  shuttleStatusEl.classList.toggle('nearby', isPlayerNearLandedShuttle());
 
     updateTravelPrompt();
   }
