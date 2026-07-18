@@ -28,7 +28,7 @@ export const QUALITY_PRESETS = deepFreeze({
     shadowMapSize: 1024,
     shadowUpdateHz: 0,
     activeUpdateHz: 45,
-    ambientUpdateHz: 20,
+    ambientUpdateHz: 30,
     distantUpdateHz: 5,
     terrainDetail: 0.78,
     creatureDetail: 0.72,
@@ -44,7 +44,7 @@ export const QUALITY_PRESETS = deepFreeze({
     shadowMapSize: 512,
     shadowUpdateHz: 0,
     activeUpdateHz: 30,
-    ambientUpdateHz: 12,
+    ambientUpdateHz: 24,
     distantUpdateHz: 3,
     terrainDetail: 0.55,
     creatureDetail: 0.45,
@@ -120,8 +120,10 @@ export class QualityManager {
     this.downshiftSamples = options.downshiftSamples ?? 2;
     this.upshiftSamples = options.upshiftSamples ?? 4;
     this.maxFrameDelta = options.maxFrameDelta ?? 0.25;
+    this.ignoreFrameAbove = options.ignoreFrameAbove ?? 0.2;
 
     if (!(this.sampleWindowSeconds > 0)) throw new RangeError('sampleWindowSeconds must be greater than zero');
+    if (!(this.ignoreFrameAbove > 0)) throw new RangeError('ignoreFrameAbove must be greater than zero');
     if (!(this.downshiftFps < this.upshiftFps)) throw new RangeError('downshiftFps must be lower than upshiftFps');
     if (!(this.downshiftSamples >= 1) || !(this.upshiftSamples >= 1)) {
       throw new RangeError('adaptation sample counts must be at least one');
@@ -223,6 +225,13 @@ export class QualityManager {
    */
   recordFrame(deltaSeconds) {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return null;
+    // Shader compilation, tab restoration, and other isolated long tasks are
+    // not sustained GPU pressure. Starting a fresh sample after those frames
+    // prevents one cold path from immediately resizing the renderer.
+    if (deltaSeconds > this.ignoreFrameAbove) {
+      this.resetAdaptation();
+      return null;
+    }
     this.sampleTime += Math.min(deltaSeconds, this.maxFrameDelta);
     this.sampleFrames += 1;
     if (this.sampleTime < this.sampleWindowSeconds) return null;

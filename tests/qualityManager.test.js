@@ -21,6 +21,7 @@ test('supports fixed and automatic quality modes', () => {
   assert.equal(manager.settings.particleScale, 0.65);
   assert.equal(manager.settings.shadowMapSize, 1024);
   assert.equal(manager.settings.shadowsEnabled, false);
+  assert.equal(manager.settings.ambientUpdateHz, 30);
 });
 
 test('persists the selected mode and restores it safely', () => {
@@ -100,6 +101,23 @@ test('recordFrame reports only after a complete sampling window', () => {
   assert.ok(result);
   assert.ok(Math.abs(result.fps - 60) < 0.01);
   assert.equal(result.signal, 'headroom');
+});
+
+test('isolated long tasks reset adaptation instead of forcing a downshift', () => {
+  const manager = createQualityManager({
+    initialMode: 'auto',
+    initialAutoTier: 'medium',
+    persist: false,
+    sampleWindowSeconds: 0.1,
+    downshiftSamples: 1,
+    ignoreFrameAbove: 0.2,
+  });
+
+  for (let index = 0; index < 5; index += 1) manager.recordFrame(1 / 60);
+  assert.equal(manager.recordFrame(0.65), null);
+  assert.equal(manager.tier, 'medium');
+  assert.equal(manager.sampleFrames, 0);
+  assert.equal(manager.lowSamples, 0);
 });
 
 test('subscribers are notified only when applicable settings change', () => {

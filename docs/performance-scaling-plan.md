@@ -30,6 +30,9 @@ browser:
    stable user-facing mode or shared settings contract.
 7. There were no automated bundle ceilings or repeatable scene benchmarks, so
    regressions could land unnoticed.
+8. First keyboard input synchronously synthesized more than a million audio
+   samples, and hidden thruster PointLights changed the global shader light
+   count when they first appeared.
 
 ## Work completed in this pass
 
@@ -54,6 +57,9 @@ browser:
   and mote.
 - Paused the frame body when the document is hidden and throttled ambient world
   simulation according to the selected quality tier.
+- Reduced world/hub streaming checks to 8 Hz and precomputed their hub/runtime
+  lookup entries instead of rebuilding arrays and scanning hub lists every
+  animation frame.
 
 ### Draw calls and per-frame allocation
 
@@ -65,12 +71,22 @@ browser:
   treads no longer rewrite all instance matrices every frame.
 - Added explicit disposal hooks to the course, train, and vehicle modules.
 
-### Startup and quality controls
+### First-use stalls, startup, and quality controls
 
-- Moved the mountain-home implementation behind a dynamic import and build it
-  only when its region becomes resident.
+- Builds the mountain home while the loading overlay is active. This keeps its
+  500-line procedural builder and new light/material variants out of an active
+  exploration frame.
 - Keeps procedural Earth texture generation behind the loading screen so its
   main-thread work cannot stall an active gameplay frame.
+- Splits procedural soundtrack/noise synthesis into small yielding tasks,
+  halves the repeated music loop, and does not wait on a browser-controlled
+  `AudioContext.resume()` promise before declaring the graph ready.
+- Removed first-use PointLights from the player and rover thruster groups. The
+  additive/emissive flames remain, but activating thrust no longer changes the
+  scene-wide shader light count.
+- Keeps local PointLights and SpotLights disabled for Auto/Medium/Low, using
+  emissive art and stable global lights instead. Explicit High retains the local
+  lighting treatment.
 - Added Auto, High, Medium, and Low quality modes. Auto now tops out at Medium
   to avoid repeated Retina-resolution frame drops; High remains an explicit
   choice. Press `Q` to cycle the modes.
@@ -89,6 +105,10 @@ browser:
   about 196–208 calls.
 - Added deterministic desktop/mobile device overrides, separate persisted
   preferences, and a Mobile Auto ceiling at Low quality.
+- Uses longer quality sample windows and two consecutive slow samples before a
+  downshift. Isolated frames over 200 ms reset adaptation rather than causing a
+  renderer resize, and benchmark query overrides no longer overwrite normal
+  saved preferences.
 - Reused camera vectors instead of allocating two or more vectors every frame,
   and skips Lumi's hidden visual posing while the Moon region is not resident.
 
@@ -99,15 +119,18 @@ useful for comparing this pass, not as universal hardware claims.
 
 | Scene | Before | After this pass |
 | --- | --- | --- |
-| Mars spawn, streamed | ~486 calls, ~35 FPS | 181–368 calls across sampled views, 60 FPS on High |
+| Mars spawn, Auto/Medium | ~486 calls, ~35 FPS | ~208 calls, ~266k triangles, 60 FPS |
+| Mars spawn, Mobile Auto/Low | no fixed mobile baseline | ~186 calls, ~100k triangles, 60 FPS |
+| First movement | visible freeze while audio synthesized | 20.1 ms worst sampled frame, no long frame |
+| First jetpack thrust | visible shader freeze | 17.8 ms desktop / 17.7 ms mobile worst sampled frame |
 | Xenobiology interior | ~1,606 calls, ~1 FPS | ~588–632 warmed calls; 36–60 FPS on High, 60 FPS on Medium |
 | Aquarium focus | part of the prior Xenobiology hotspot | ~943 calls, 48 FPS on High |
-| Mountain home | loaded in the initial module | lazy chunk; 141 calls, 60 FPS when resident |
+| Mountain home approach | deferred procedural build during exploration | built under loading overlay; no approach-time module/builder stall |
 
-The production build now keeps the mountain home in a separate ~4.3 KB gzip
-chunk. Initial JavaScript is ~252.2 KB gzip and passes the enforced 275 KB
-ceiling. The Vite warning about a large entry chunk is still valid: the next
-major startup win is splitting whole optional regions, not merely raising the
+The production build remains below the enforced 275 KB initial-JavaScript gzip
+ceiling. The Vite warning about a large entry chunk is still valid. The next
+startup win is splitting complete regions with a staged preload contract, not
+running large region builders on the first active frame or merely raising the
 warning threshold.
 
 ## Remaining roadmap
@@ -134,8 +157,9 @@ Priority: high. Goal: adding content to one region should not increase startup
 construction time or permanent GPU memory elsewhere.
 
 - Give every region a `load`, `activate`, `deactivate`, and `dispose` contract.
-- Dynamically import the Nightfall cave/train, Moon landmarks, Zephyra, and other
-  optional landmarks as region modules.
+- Dynamically import the Nightfall cave/train, mountain home, Moon landmarks,
+  Zephyra, and other optional landmarks as region modules, but stage their CPU
+  build and GPU upload work behind a travel/loading boundary before activation.
 - Use the resource cache for shared geometry, material, and texture ownership.
 - Retain recently visited regions in a small LRU cache to avoid travel hitches;
   dispose the least-recently-used region when its memory budget is exceeded.

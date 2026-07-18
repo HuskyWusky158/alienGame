@@ -4,6 +4,7 @@ import { buildMarsVehicleSuite } from './vehicleSuite.js';
 import { buildRockGarage } from './rockGarage.js';
 import { buildDrivingCourses } from './drivingCourses.js';
 import { buildCaveMineTrain } from './mineTrain.js';
+import { buildAlienMountainHouse } from './alienHouse.js';
 import { createProceduralRockGeometry, createProceduralRockMaterial } from './proceduralRocks.js';
 import { createQualityManager, QUALITY_MODES } from './core/qualityManager.js';
 import { mergeBufferGeometries as mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -16,19 +17,21 @@ const isTouchDevice = requestedDeviceClass === 'mobile'
   || (requestedDeviceClass !== 'desktop' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
 if (isTouchDevice) document.body.classList.add('touch-device');
 const requestedQualityMode = startupQuery.get('quality');
+const hasRequestedQualityOverride = QUALITY_MODES.includes(requestedQualityMode);
 const qualityManager = createQualityManager({
-  initialMode: QUALITY_MODES.includes(requestedQualityMode) ? requestedQualityMode : 'auto',
+  initialMode: hasRequestedQualityOverride ? requestedQualityMode : 'auto',
   initialAutoTier: isTouchDevice ? 'low' : 'medium',
   autoTierCeiling: isTouchDevice ? 'low' : 'medium',
-  sampleWindowSeconds: 1.5,
-  downshiftSamples: 1,
-  upshiftSamples: 6,
-  storageKey: isTouchDevice ? 'alien-game:quality:mobile:v3' : 'alien-game:quality:desktop:v3',
+  sampleWindowSeconds: 2.25,
+  downshiftSamples: 2,
+  upshiftSamples: 4,
+  persist: !hasRequestedQualityOverride,
+  storageKey: isTouchDevice ? 'alien-game:quality:mobile:v4' : 'alien-game:quality:desktop:v4',
   devicePixelRatio: window.devicePixelRatio,
 });
 // Explicit query parameters are a deterministic benchmark/debug override and
 // must win over a previously persisted in-game preference.
-if (QUALITY_MODES.includes(requestedQualityMode)) {
+if (hasRequestedQualityOverride) {
   qualityManager.setMode(requestedQualityMode, { persist: false });
 }
 let qualitySettings = qualityManager.settings;
@@ -52,6 +55,14 @@ function setLoadingStage(progress, status) {
 function finishLoadingScreen() {
   if (loadingComplete || !loadingScreenEl) return;
   loadingComplete = true;
+  // Loading/build work is useful to profile separately, but it should not be
+  // presented as an in-game long frame or contaminate the first play window.
+  if (performanceDebugEl) {
+    performanceDebugTime = 0;
+    performanceDebugFrames = 0;
+    performanceWorstFrameMs = 0;
+    performanceLongFrames = 0;
+  }
   setLoadingStage(100, 'EXPEDITION READY');
   window.setTimeout(() => loadingScreenEl.classList.add('is-ready'), 180);
   window.setTimeout(() => loadingScreenEl.remove(), 1100);
@@ -3413,10 +3424,17 @@ let drivingCoursePrompt = '';
 let activeDrivingCourse = null;
 
 function makeWoodSignTexture(text) {
+  const designWidth = 1024;
+  const designHeight = 256;
   const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 256;
+  // These signs sit beside the spawn trails and can enter the frustum during
+  // the first few walking steps. A 1024x256 mipmapped canvas caused a cold GPU
+  // upload right on that movement frame. Draw at half resolution and use a
+  // single linear level; the physical sign never needs the extra texels.
+  canvas.width = designWidth / 2;
+  canvas.height = designHeight / 2;
   const ctx = canvas.getContext('2d');
+  ctx.scale(0.5, 0.5);
   const fontSize = text.length > 22 ? 94 : text.length > 16 ? 108 : 126;
   ctx.font = `900 ${fontSize}px sans-serif`;
   ctx.textAlign = 'center';
@@ -3426,15 +3444,17 @@ function makeWoodSignTexture(text) {
   ctx.shadowBlur = 12;
   ctx.strokeStyle = '#241006';
   ctx.lineWidth = 24;
-  ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  ctx.strokeText(text, designWidth / 2, designHeight / 2 + 3, 960);
   ctx.shadowBlur = 0;
   ctx.strokeStyle = '#fff7df';
   ctx.lineWidth = 5;
-  ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  ctx.strokeText(text, designWidth / 2, designHeight / 2 + 3, 960);
   ctx.fillStyle = '#fff1bc';
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 3, 960);
+  ctx.fillText(text, designWidth / 2, designHeight / 2 + 3, 960);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
   return texture;
 }
 
@@ -6918,12 +6938,10 @@ function updateCaveAtmosphere(dt, listenerNormal) {
 }
 
 const hubRuntime = {};
-let alienHomeLoadPromise = null;
 
 function ensureAlienMountainHome() {
   if (hubRuntime.home?.loaded) return Promise.resolve(hubRuntime.home);
-  if (alienHomeLoadPromise) return alienHomeLoadPromise;
-  alienHomeLoadPromise = import('./alienHouse.js').then(({ buildAlienMountainHouse }) => {
+  try {
     const container = hubRuntime.home.group;
     const home = buildAlienMountainHouse({
       THREE,
@@ -6938,13 +6956,11 @@ function ensureAlienMountainHome() {
     home.group = container;
     home.loaded = true;
     hubRuntime.home = home;
-    return home;
-  }).catch((error) => {
-    alienHomeLoadPromise = null;
+    return Promise.resolve(home);
+  } catch (error) {
     console.error('Unable to load the alien mountain home', error);
-    return null;
-  });
-  return alienHomeLoadPromise;
+    return Promise.resolve(null);
+  }
 }
 
 HUBS.forEach((hub) => {
@@ -6969,6 +6985,10 @@ HUBS.forEach((hub) => {
     };
   }
 });
+// Build the home while the loading screen is active. Deferring this 500-line
+// procedural builder until the player crossed its streaming boundary caused a
+// visible exploration freeze.
+ensureAlienMountainHome();
 
 function applyXenobiologyQuality(settings) {
   const xenobiology = hubRuntime.planetarium;
@@ -9240,9 +9260,6 @@ function buildAlien() {
     flameCore.position.set(x, 0.93, 0.58);
     thrusterFlames.add(flameCore);
   });
-  const jetpackThrusterLight = new THREE.PointLight(0x59d9ff, 3.2, 8, 2);
-  jetpackThrusterLight.position.set(0, 0.82, 0.62);
-  thrusterFlames.add(jetpackThrusterLight);
   thrusterFlames.visible = false;
   jetpack.add(thrusterFlames);
   alien.add(jetpack);
@@ -9448,9 +9465,6 @@ function buildMarsRover(driver) {
       roverThrusters.add(flame);
     });
   });
-  const roverThrusterLight = new THREE.PointLight(0x54d8ff, 5.2, 11, 2);
-  roverThrusterLight.position.set(0, -0.55, 0.25);
-  roverThrusters.add(roverThrusterLight);
   roverThrusters.visible = false;
   chassis.add(roverThrusters);
 
@@ -9677,6 +9691,14 @@ let caveWaterGain = null;
 let caveWaterFilter = null;
 let audioEnabled = true;
 let audioStarted = false;
+let audioSystemReady = false;
+let audioStartPromise = null;
+
+const AUDIO_SYNTHESIS_CHUNK_SIZE = 8192;
+
+function yieldAudioSynthesis() {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
 
 function updateAudioIndicator() {
   audioToggleEl.classList.toggle('audio-live', audioStarted && audioEnabled);
@@ -9688,31 +9710,41 @@ function updateAudioIndicator() {
   );
 }
 
-function createBrownNoiseBuffer(context, seconds = 5) {
+async function createBrownNoiseBuffer(context, seconds = 3) {
   const frameCount = Math.floor(context.sampleRate * seconds);
   const buffer = context.createBuffer(1, frameCount, context.sampleRate);
   const samples = buffer.getChannelData(0);
   let lastSample = 0;
-  for (let i = 0; i < frameCount; i++) {
-    const white = Math.random() * 2 - 1;
-    lastSample = (lastSample + white * 0.025) / 1.025;
-    samples[i] = lastSample * 3.2;
+  for (let start = 0; start < frameCount; start += AUDIO_SYNTHESIS_CHUNK_SIZE) {
+    const end = Math.min(frameCount, start + AUDIO_SYNTHESIS_CHUNK_SIZE);
+    for (let i = start; i < end; i++) {
+      const white = Math.random() * 2 - 1;
+      lastSample = (lastSample + white * 0.025) / 1.025;
+      samples[i] = lastSample * 3.2;
+    }
+    if (end < frameCount) await yieldAudioSynthesis();
   }
   return buffer;
 }
 
-function createWhiteNoiseBuffer(context, seconds = 3) {
+async function createWhiteNoiseBuffer(context, seconds = 2) {
   const frameCount = Math.floor(context.sampleRate * seconds);
   const buffer = context.createBuffer(1, frameCount, context.sampleRate);
   const samples = buffer.getChannelData(0);
-  for (let i = 0; i < frameCount; i++) samples[i] = Math.random() * 2 - 1;
+  for (let start = 0; start < frameCount; start += AUDIO_SYNTHESIS_CHUNK_SIZE) {
+    const end = Math.min(frameCount, start + AUDIO_SYNTHESIS_CHUNK_SIZE);
+    for (let i = start; i < end; i++) samples[i] = Math.random() * 2 - 1;
+    if (end < frameCount) await yieldAudioSynthesis();
+  }
   return buffer;
 }
 
-function createChillHopBuffer(context) {
+async function createChillHopBuffer(context) {
   const bpm = 72;
   const beatDuration = 60 / bpm;
-  const duration = beatDuration * 32;
+  // Sixteen beats complete the four-chord progression. The old 32-beat
+  // buffer repeated the same structure and doubled first-use synthesis work.
+  const duration = beatDuration * 16;
   const frameCount = Math.floor(context.sampleRate * duration);
   const buffer = context.createBuffer(1, frameCount, context.sampleRate);
   const samples = buffer.getChannelData(0);
@@ -9721,50 +9753,54 @@ function createChillHopBuffer(context) {
   let noiseSeed = 0x325a91;
   let previousNoise = 0;
 
-  for (let i = 0; i < frameCount; i++) {
-    const time = i / context.sampleRate;
-    const beat = time / beatDuration;
-    const beatIndex = Math.floor(beat);
-    const beatFraction = beat - beatIndex;
-    const chordRoot = roots[Math.floor(beat / 4) % roots.length];
-    noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0;
-    const noise = (noiseSeed / 0xffffffff) * 2 - 1;
-    const highNoise = noise - previousNoise;
-    previousNoise = noise;
+  for (let start = 0; start < frameCount; start += AUDIO_SYNTHESIS_CHUNK_SIZE) {
+    const end = Math.min(frameCount, start + AUDIO_SYNTHESIS_CHUNK_SIZE);
+    for (let i = start; i < end; i++) {
+      const time = i / context.sampleRate;
+      const beat = time / beatDuration;
+      const beatIndex = Math.floor(beat);
+      const beatFraction = beat - beatIndex;
+      const chordRoot = roots[Math.floor(beat / 4) % roots.length];
+      noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0;
+      const noise = (noiseSeed / 0xffffffff) * 2 - 1;
+      const highNoise = noise - previousNoise;
+      previousNoise = noise;
 
-    const padWobble = 0.82 + Math.sin(time * Math.PI * 0.34) * 0.08;
-    const chord = (
-      Math.sin(Math.PI * 2 * chordRoot * time) * 0.068
-      + Math.sin(Math.PI * 2 * chordRoot * 1.1892 * time) * 0.052
-      + Math.sin(Math.PI * 2 * chordRoot * 1.4983 * time) * 0.043
-      + Math.sin(Math.PI * 2 * chordRoot * 0.5 * time) * 0.035
-    ) * padWobble;
+      const padWobble = 0.82 + Math.sin(time * Math.PI * 0.34) * 0.08;
+      const chord = (
+        Math.sin(Math.PI * 2 * chordRoot * time) * 0.068
+        + Math.sin(Math.PI * 2 * chordRoot * 1.1892 * time) * 0.052
+        + Math.sin(Math.PI * 2 * chordRoot * 1.4983 * time) * 0.043
+        + Math.sin(Math.PI * 2 * chordRoot * 0.5 * time) * 0.035
+      ) * padWobble;
 
-    const stepIndex = Math.floor(beat * 2) % melody.length;
-    const stepPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
-    const melodyEnvelope = Math.exp(-stepPhase * 3.7) * (stepIndex % 4 === 3 ? 0.35 : 1);
-    const melodyTone = Math.sin(Math.PI * 2 * chordRoot * melody[stepIndex] * time) * melodyEnvelope * 0.034;
+      const stepIndex = Math.floor(beat * 2) % melody.length;
+      const stepPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
+      const melodyEnvelope = Math.exp(-stepPhase * 3.7) * (stepIndex % 4 === 3 ? 0.35 : 1);
+      const melodyTone = Math.sin(Math.PI * 2 * chordRoot * melody[stepIndex] * time) * melodyEnvelope * 0.034;
 
-    const kickPhase = beatFraction * beatDuration;
-    const kickActive = beatIndex % 4 === 0 || beatIndex % 4 === 2;
-    const kick = kickActive
-      ? Math.sin(Math.PI * 2 * (48 + Math.exp(-kickPhase * 18) * 42) * kickPhase) * Math.exp(-kickPhase * 13) * 0.2
-      : 0;
+      const kickPhase = beatFraction * beatDuration;
+      const kickActive = beatIndex % 4 === 0 || beatIndex % 4 === 2;
+      const kick = kickActive
+        ? Math.sin(Math.PI * 2 * (48 + Math.exp(-kickPhase * 18) * 42) * kickPhase) * Math.exp(-kickPhase * 13) * 0.2
+        : 0;
 
-    const snareActive = beatIndex % 4 === 1 || beatIndex % 4 === 3;
-    const snare = snareActive ? highNoise * Math.exp(-kickPhase * 18) * 0.055 : 0;
-    const halfBeatPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
-    const brushedHat = highNoise * Math.exp(-halfBeatPhase * 42) * 0.018;
-    const vinyl = noise * 0.0035;
-    samples[i] = THREE.MathUtils.clamp((chord + melodyTone + kick + snare + brushedHat + vinyl) * 0.82, -0.72, 0.72);
+      const snareActive = beatIndex % 4 === 1 || beatIndex % 4 === 3;
+      const snare = snareActive ? highNoise * Math.exp(-kickPhase * 18) * 0.055 : 0;
+      const halfBeatPhase = (beat * 2 - Math.floor(beat * 2)) * beatDuration * 0.5;
+      const brushedHat = highNoise * Math.exp(-halfBeatPhase * 42) * 0.018;
+      const vinyl = noise * 0.0035;
+      samples[i] = THREE.MathUtils.clamp((chord + melodyTone + kick + snare + brushedHat + vinyl) * 0.82, -0.72, 0.72);
+    }
+    if (end < frameCount) await yieldAudioSynthesis();
   }
   return buffer;
 }
 
-function buildGlobalChillHopAudio(context, output) {
+function buildGlobalChillHopAudio(context, output, chillHopBuffer) {
   const now = context.currentTime;
   const chillSource = context.createBufferSource();
-  chillSource.buffer = createChillHopBuffer(context);
+  chillSource.buffer = chillHopBuffer;
   chillSource.loop = true;
   const chillFilter = context.createBiquadFilter();
   chillFilter.type = 'lowpass';
@@ -9780,8 +9816,8 @@ function buildGlobalChillHopAudio(context, output) {
   chillSource.start(now);
 }
 
-function buildAudioSystem() {
-  if (audioContext) return true;
+async function buildAudioSystem() {
+  if (audioSystemReady) return true;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
     audioEnabled = false;
@@ -9792,6 +9828,16 @@ function buildAudioSystem() {
   }
 
   audioContext = new AudioContextClass();
+  // Resume immediately while this call still belongs to the user gesture.
+  // The expensive buffer synthesis below yields between small chunks.
+  const resumePromise = audioContext.state === 'running'
+    ? Promise.resolve()
+    : audioContext.resume().catch(() => {});
+  const [chillHopBuffer, brownNoiseBuffer, whiteNoiseBuffer] = await Promise.all([
+    createChillHopBuffer(audioContext),
+    createBrownNoiseBuffer(audioContext),
+    createWhiteNoiseBuffer(audioContext),
+  ]);
   const now = audioContext.currentTime;
 
   audioMasterGain = audioContext.createGain();
@@ -9804,7 +9850,7 @@ function buildAudioSystem() {
   limiter.release.setValueAtTime(0.32, now);
   audioMasterGain.connect(limiter).connect(audioContext.destination);
 
-  buildGlobalChillHopAudio(audioContext, audioMasterGain);
+  buildGlobalChillHopAudio(audioContext, audioMasterGain, chillHopBuffer);
 
   ambientBusGain = audioContext.createGain();
   ambientBusGain.gain.setValueAtTime(0.052, now);
@@ -9838,7 +9884,7 @@ function buildAudioSystem() {
   ambienceLfo.connect(ambienceLfoGain).connect(ambientBusGain.gain);
 
   const noiseSource = audioContext.createBufferSource();
-  noiseSource.buffer = createBrownNoiseBuffer(audioContext);
+  noiseSource.buffer = brownNoiseBuffer;
   noiseSource.loop = true;
   const spaceNoiseFilter = audioContext.createBiquadFilter();
   const spaceNoiseGain = audioContext.createGain();
@@ -9889,7 +9935,7 @@ function buildAudioSystem() {
   thrusterNoiseFilter.connect(thrusterBusGain);
 
   const thrusterNoiseSource = audioContext.createBufferSource();
-  thrusterNoiseSource.buffer = createWhiteNoiseBuffer(audioContext);
+  thrusterNoiseSource.buffer = whiteNoiseBuffer;
   thrusterNoiseSource.loop = true;
   thrusterNoiseSource.connect(thrusterNoiseFilter);
 
@@ -9926,23 +9972,47 @@ function buildAudioSystem() {
   thrusterNoiseSource.start(now);
   thrusterToneOscillator.start(now);
   thrusterSubOscillator.start(now);
+  // Some browsers leave resume() pending until they finish validating the
+  // gesture. The graph is ready regardless, so do not keep the entire build
+  // promise chained to that browser-controlled state transition.
+  void resumePromise;
+  audioSystemReady = true;
   return true;
 }
 
-async function ensureMarsAudio() {
-  if (!audioEnabled || !buildAudioSystem()) return;
-  try {
-    const wasStarted = audioStarted;
-    if (audioContext.state !== 'running') await audioContext.resume();
-    audioStarted = audioContext.state === 'running';
-    const now = audioContext.currentTime;
-    audioMasterGain.gain.cancelScheduledValues(now);
-    audioMasterGain.gain.setTargetAtTime(0.78, now, 0.22);
-    updateAudioIndicator();
-    if (audioStarted && !wasStarted) showBanner('CHILLHOP SOUNDTRACK · PLAYING SOFTLY');
-  } catch (error) {
-    console.warn('Mars audio could not start:', error);
-  }
+function ensureMarsAudio() {
+  if (!audioEnabled || (audioStarted && audioContext?.state === 'running')) return Promise.resolve();
+  if (audioStartPromise) return audioStartPromise;
+  audioStartPromise = (async () => {
+    try {
+      const wasStarted = audioStarted;
+      if (!await buildAudioSystem()) return;
+      if (audioContext.state !== 'running') {
+        audioContext.resume().then(() => {
+          if (audioContext.state !== 'running') return;
+          audioStarted = true;
+          const resumedAt = audioContext.currentTime;
+          audioMasterGain.gain.cancelScheduledValues(resumedAt);
+          audioMasterGain.gain.setTargetAtTime(0.78, resumedAt, 0.22);
+          updateAudioIndicator();
+          if (!wasStarted) showBanner('CHILLHOP SOUNDTRACK · PLAYING SOFTLY');
+        }).catch(() => {});
+        updateAudioIndicator();
+        return;
+      }
+      audioStarted = audioContext.state === 'running';
+      const now = audioContext.currentTime;
+      audioMasterGain.gain.cancelScheduledValues(now);
+      audioMasterGain.gain.setTargetAtTime(0.78, now, 0.22);
+      updateAudioIndicator();
+      if (audioStarted && !wasStarted) showBanner('CHILLHOP SOUNDTRACK · PLAYING SOFTLY');
+    } catch (error) {
+      console.warn('Mars audio could not start:', error);
+    } finally {
+      audioStartPromise = null;
+    }
+  })();
+  return audioStartPromise;
 }
 
 function muteMarsAudio() {
@@ -12232,6 +12302,15 @@ const marsHubDetailStreaming = {
   crash: { show: 60, hide: 78, resident: null },
   home: { show: 72, hide: 90, resident: null },
 };
+const worldDetailEntries = Object.keys(worldDetailResidency);
+const marsHubDetailEntries = Object.entries(marsHubDetailStreaming).map(([key, stream]) => ({
+  key,
+  stream,
+  runtime: hubRuntime[key],
+  hub: HUBS.find((candidate) => candidate.key === key),
+}));
+const detailStreamingUpdateInterval = 1 / 8;
+let detailStreamingUpdateAccumulator = detailStreamingUpdateInterval;
 
 function resetInactiveWorldState(world) {
   if (world === 'mars') {
@@ -12261,7 +12340,7 @@ function updateWorldDetailStreaming() {
     moon: Math.max(0, camera.position.distanceTo(MOON_CENTER) - MOON_RADIUS),
     zephyra: Math.max(0, camera.position.distanceTo(ZEPHYRA_CENTER) - ZEPHYRA_RADIUS),
   };
-  Object.keys(worldDetailResidency).forEach((world) => {
+  worldDetailEntries.forEach((world) => {
     const threshold = worldDetailThresholds[world];
     const wasResident = worldDetailResidency[world];
     const shouldBeResident = worldDetailStreamingDisabled || (wasResident === null
@@ -12283,9 +12362,7 @@ function activeMarsSurfaceNormal() {
 
 function updateMarsHubDetailStreaming() {
   const activeNormal = activeMarsSurfaceNormal();
-  for (const [key, stream] of Object.entries(marsHubDetailStreaming)) {
-    const runtime = hubRuntime[key];
-    const hub = HUBS.find((candidate) => candidate.key === key);
+  for (const { key, stream, runtime, hub } of marsHubDetailEntries) {
     if (!runtime?.group || !hub) continue;
     const distance = activeNormal ? geodesicDistance(activeNormal, hub.normal) : Infinity;
     const threshold = (stream.resident ? stream.hide : stream.show) * qualitySettings.lodDistanceScale;
@@ -12298,6 +12375,14 @@ function updateMarsHubDetailStreaming() {
     runtime.group.visible = shouldBeResident;
     if (key === 'home' && shouldBeResident && !runtime.loaded) ensureAlienMountainHome();
   }
+}
+
+function updateDetailStreaming(dt) {
+  detailStreamingUpdateAccumulator += dt;
+  if (detailStreamingUpdateAccumulator < detailStreamingUpdateInterval) return;
+  detailStreamingUpdateAccumulator %= detailStreamingUpdateInterval;
+  updateWorldDetailStreaming();
+  updateMarsHubDetailStreaming();
 }
 
 // The xenobiology globe is transparent, but the distant Mars surface detail is
@@ -12327,14 +12412,24 @@ const worldDetailStreamingDisabled = performanceDebugEnabled && performanceQuery
 const performanceDebugEl = performanceDebugEnabled ? document.createElement('pre') : null;
 let performanceDebugTime = 0;
 let performanceDebugFrames = 0;
+let performanceWorstFrameMs = 0;
+let performanceLongFrames = 0;
 const performanceDrawCalls = new Map();
 const performanceDrawStarts = new WeakMap();
 const xenobiologyQualityMaterialSet = new Set(
   hubRuntime.planetarium.qualitySensitiveMaterials.map((entry) => entry.material)
 );
 const globalQualitySensitiveMaterials = collectQualitySensitiveMaterials(scene, xenobiologyQualityMaterialSet);
+const globalQualityLocalLights = [];
+scene.traverse((object) => {
+  if (object.isPointLight || object.isSpotLight) globalQualityLocalLights.push(object);
+});
 function applyGlobalMaterialQuality(settings) {
-  applyQualitySensitiveMaterials(globalQualitySensitiveMaterials, settings.materialQuality === 'high');
+  const useHighQuality = settings.materialQuality === 'high';
+  applyQualitySensitiveMaterials(globalQualitySensitiveMaterials, useHighQuality);
+  // Local lights multiply shader variants whenever streamed groups appear.
+  // Medium/Low rely on emissive art plus the stable global lighting rig.
+  globalQualityLocalLights.forEach((light) => { light.visible = useHighQuality; });
 }
 applyGlobalMaterialQuality(qualitySettings);
 qualityManager.subscribe(({ settings }) => applyGlobalMaterialQuality(settings), { emitCurrent: false });
@@ -12372,6 +12467,8 @@ function updatePerformanceDebug(dt) {
   if (!performanceDebugEl) return;
   performanceDebugTime += dt;
   performanceDebugFrames += 1;
+  performanceWorstFrameMs = Math.max(performanceWorstFrameMs, dt * 1000);
+  if (dt > 1 / 30) performanceLongFrames += 1;
   if (performanceDebugTime < 0.5) return;
   const snapshot = {
     fps: performanceDebugFrames / performanceDebugTime,
@@ -12382,6 +12479,8 @@ function updatePerformanceDebug(dt) {
     pixelRatio: currentRenderPixelRatio,
     qualityMode: qualityManager.mode,
     qualityTier: qualityManager.tier,
+    worstFrameMs: performanceWorstFrameMs,
+    longFrames: performanceLongFrames,
     residency: { ...worldDetailResidency },
     xenobiologyCullActive: xenobiologyInteriorCullActive,
     xenobiologyCullVisible: xenobiologyInteriorCullObjects.filter((object) => object.visible).length,
@@ -12394,6 +12493,7 @@ function updatePerformanceDebug(dt) {
   window.__ALIEN_GAME_PERF__ = snapshot;
   performanceDebugEl.textContent = [
     `FPS ${snapshot.fps.toFixed(0)} · DPR ${snapshot.pixelRatio.toFixed(2)}`,
+    `WORST ${snapshot.worstFrameMs.toFixed(1)} MS · LONG ${snapshot.longFrames}`,
     `QUALITY ${snapshot.qualityMode.toUpperCase()} · ${snapshot.qualityTier.toUpperCase()}`,
     `CALLS ${snapshot.calls} · TRIS ${snapshot.triangles.toLocaleString()}`,
     `GPU GEO ${snapshot.geometries} · TEX ${snapshot.textures}`,
@@ -12407,6 +12507,8 @@ function updatePerformanceDebug(dt) {
   performanceDrawCalls.clear();
   performanceDebugTime = 0;
   performanceDebugFrames = 0;
+  performanceWorstFrameMs = 0;
+  performanceLongFrames = 0;
 }
 
 function updateAdaptiveResolution(rawDt) {
@@ -12644,6 +12746,10 @@ if (performanceQuery.has('ufo-archive-qa') || performanceQuery.has('ufo-cabin-st
   loadUfoProjectScreens();
 }
 if (performanceQuery.has('walk-audio-qa')) keys.w = true;
+if (performanceQuery.has('foot-thrust-qa')) {
+  keys[' '] = true;
+  jumpQueued = true;
+}
 if (performanceQuery.has('alien-house-qa')) {
   currentWorld = 'mars';
   travelMode = 'walking';
@@ -12749,8 +12855,7 @@ function animate() {
   const dt = Math.min(rawDt, 0.05);
   const t = clock.elapsedTime;
   updateAdaptiveResolution(rawDt);
-  updateWorldDetailStreaming();
-  updateMarsHubDetailStreaming();
+  updateDetailStreaming(dt);
 
   const throttleInput = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
   const steeringInput = (keys['a'] || keys['arrowleft'] ? 1 : 0) - (keys['d'] || keys['arrowright'] ? 1 : 0);

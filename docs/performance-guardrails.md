@@ -57,6 +57,8 @@ window.__ALIEN_GAME_PERF__
 //   pixelRatio,
 //   qualityMode: 'auto' | 'high' | 'medium' | 'low',
 //   qualityTier: 'high' | 'medium' | 'low',
+//   worstFrameMs,
+//   longFrames,
 //   residency: { mars, moon, zephyra },
 //   xenobiologyCullActive,
 //   xenobiologyCullVisible,
@@ -78,7 +80,7 @@ viewport or `&device=desktop` with a 1280×720 viewport. Mobile Auto starts and
 stays at Low unless the player explicitly chooses a higher mode, and mobile and
 desktop preferences use separate storage keys.
 
-Use a fixed 1280×720 viewport. Wait for the loading screen to finish, allow 10 seconds for shader compilation and adaptive resolution to settle, and then take 20 snapshots at 500 ms intervals. Record median FPS, 95th-percentile frame time when browser tracing is available, maximum draw calls/triangles, and the final geometry/texture counts. Run each scene three times and keep the median run.
+Use a fixed 1280×720 viewport. Wait for the loading screen to finish, allow 10 seconds for shader compilation and adaptive resolution to settle, and then take 20 snapshots at 500 ms intervals. Record median FPS, the overlay's maximum `worstFrameMs` and `longFrames`, maximum draw calls/triangles, and the final geometry/texture counts. Run each scene three times and keep the median run.
 
 Do not compare FPS across different computers. FPS budgets apply to the target machine; draw-call, triangle, and residency regressions are generally comparable across machines.
 
@@ -107,14 +109,22 @@ Append `&draw-profile` to aggregate the five busiest scene branches in the
 overlay. This diagnostic mode adds render hooks, so use it to locate a hotspot,
 not for the final FPS measurement.
 
+First-use interaction checks must start from a fresh page, settle at Mars spawn,
+and then trigger one real movement or thruster input. A passing run has no frame
+above 33 ms in the next two overlay windows. Do not use `draw-profile` for this
+check: its per-renderable hooks materially change the frame being measured.
+
 Current 1280×720 Medium baselines on the development machine after the
 Xenobiology pass are roughly 125–160 calls across the museum and Aquarium
 views, both at 60 FPS. The Aquarium previously fell to a sustained 1 FPS
 because the nearby Oasis updater re-enabled hundreds of off-screen objects and
 its transmissive water forced an extra opaque-scene pass.
 
-Current 390×844 Mobile Auto baselines are about 117 calls at Mars spawn and
-77–81 calls in the Aquarium, both at 60 FPS on the development machine.
+Current Mobile Auto starts at Low, renders roughly 100,000 triangles near Mars
+spawn, and settles at 60 FPS on the development machine. The desktop Auto path
+renders roughly 266,000 triangles and also settles at 60 FPS. In the latest
+first-use checks, movement peaked at 20.1 ms, desktop jetpack activation at
+17.8 ms, and mobile jetpack activation at 17.7 ms.
 
 ## Runtime acceptance checks
 
@@ -122,6 +132,10 @@ Current 390×844 Mobile Auto baselines are about 117 calls at Mars spawn and
 - Inactive regions perform no animation or interaction updates.
 - Revisiting worlds does not cause geometry or texture counts to grow on every trip.
 - Entering a newly loaded region causes no visible multi-frame freeze.
+- First movement and first thruster activation stay below 33 ms after the scene
+  has settled.
+- An isolated shader, tab-resume, or asset-upload long frame does not persist a
+  lower quality tier or resize the renderer by itself.
 - Desktop should sustain 60 FPS on the target machine; dense scenes must never remain below 30 FPS.
 - Adaptive resolution must not be the only reason a CPU-bound scene passes. Record draw calls alongside FPS.
 
