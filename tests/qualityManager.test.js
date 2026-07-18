@@ -20,6 +20,7 @@ test('supports fixed and automatic quality modes', () => {
   assert.equal(manager.settings.pixelRatio, 1.3);
   assert.equal(manager.settings.particleScale, 0.65);
   assert.equal(manager.settings.shadowMapSize, 1024);
+  assert.equal(manager.settings.shadowsEnabled, false);
 });
 
 test('persists the selected mode and restores it safely', () => {
@@ -51,6 +52,23 @@ test('auto mode downshifts quickly and recovers with slower hysteresis', () => {
   assert.equal(manager.tier, 'medium');
   assert.equal(manager.reportFps(60).action, 'upshift');
   assert.equal(manager.tier, 'high');
+});
+
+test('auto tier ceiling prevents high-quality oscillation', () => {
+  const manager = createQualityManager({
+    initialMode: 'auto',
+    initialAutoTier: 'high',
+    autoTierCeiling: 'medium',
+    persist: false,
+    upshiftSamples: 2,
+  });
+
+  assert.equal(manager.tier, 'medium');
+  assert.equal(manager.reportFps(60).action, 'none');
+  assert.equal(manager.reportFps(60).action, 'maximum');
+  assert.equal(manager.tier, 'medium');
+  manager.setAutoTier('high');
+  assert.equal(manager.tier, 'medium');
 });
 
 test('stable samples reset adaptation streaks', () => {

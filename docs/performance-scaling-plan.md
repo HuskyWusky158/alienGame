@@ -69,11 +69,28 @@ browser:
 
 - Moved the mountain-home implementation behind a dynamic import and build it
   only when its region becomes resident.
-- Deferred procedural Earth texture generation until after initial gameplay or
-  until lunar lighting actually needs it.
-- Added Auto, High, Medium, and Low quality modes. Press `Q` to cycle them.
+- Keeps procedural Earth texture generation behind the loading screen so its
+  main-thread work cannot stall an active gameplay frame.
+- Added Auto, High, Medium, and Low quality modes. Auto now tops out at Medium
+  to avoid repeated Retina-resolution frame drops; High remains an explicit
+  choice. Press `Q` to cycle the modes.
   Explicit `?quality=` query values override saved preferences for benchmarks.
 - Added a reusable resource cache with reference-counted leases and disposal.
+- Batched Xenobiology creatures into vertex-coloured proxies for Auto, Medium,
+  and Low, while retaining the articulated versions for explicit High mode.
+- Simplified Xenobiology glass outside High mode by disabling the full-scene
+  transmission prepass and rendering double-sided transparent surfaces once.
+- Added an interior visibility boundary that hides distant Mars detail and
+  prevents the nearby Oasis updater from re-enabling off-screen scenery.
+- Batched the player's rigid face, neck, and jetpack details without flattening
+  the animated arms, legs, torso, or head silhouette.
+- Disabled the full-scene transmission prepass for all non-High glass, not just
+  Xenobiology, cutting the default desktop scene from roughly 398 calls to
+  about 196–208 calls.
+- Added deterministic desktop/mobile device overrides, separate persisted
+  preferences, and a Mobile Auto ceiling at Low quality.
+- Reused camera vectors instead of allocating two or more vectors every frame,
+  and skips Lumi's hidden visual posing while the Moon region is not resident.
 
 ## Current measured state
 

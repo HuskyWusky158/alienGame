@@ -24,9 +24,9 @@ export const QUALITY_PRESETS = deepFreeze({
     pixelRatioCeiling: 1.3,
     pixelRatioScale: 0.9,
     particleScale: 0.65,
-    shadowsEnabled: true,
+    shadowsEnabled: false,
     shadowMapSize: 1024,
-    shadowUpdateHz: 18,
+    shadowUpdateHz: 0,
     activeUpdateHz: 45,
     ambientUpdateHz: 20,
     distantUpdateHz: 5,
@@ -70,6 +70,10 @@ function isQualityTier(value) {
   return QUALITY_TIERS.includes(value);
 }
 
+function capTier(tier, ceiling) {
+  return QUALITY_TIERS[Math.min(QUALITY_TIERS.indexOf(tier), QUALITY_TIERS.indexOf(ceiling))];
+}
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -106,6 +110,7 @@ export class QualityManager {
     this.storage = options.storage === undefined ? getDefaultStorage() : options.storage;
     this.persist = options.persist !== false;
     this.persistAutoTier = options.persistAutoTier !== false;
+    this.autoTierCeiling = isQualityTier(options.autoTierCeiling) ? options.autoTierCeiling : 'high';
     this.sampleWindowSeconds = options.sampleWindowSeconds ?? 2.25;
     // Protect frame pacing before a scene falls into visibly choppy territory.
     // Two sustained sub-50 windows still avoid reacting to one shader-compile
@@ -126,7 +131,7 @@ export class QualityManager {
     const requestedMode = preference?.mode ?? options.initialMode ?? 'auto';
     const initialAutoTier = preference?.autoTier ?? options.initialAutoTier ?? 'high';
     this.mode = isQualityMode(requestedMode) ? requestedMode : 'auto';
-    this.autoTier = isQualityTier(initialAutoTier) ? initialAutoTier : 'high';
+    this.autoTier = capTier(isQualityTier(initialAutoTier) ? initialAutoTier : 'high', this.autoTierCeiling);
     this.tier = this.mode === 'auto' ? this.autoTier : this.mode;
     this.devicePixelRatio = Math.max(0.5, options.devicePixelRatio ?? globalThis.devicePixelRatio ?? 1);
     this.lastFps = null;
@@ -190,10 +195,11 @@ export class QualityManager {
 
   setAutoTier(tier, { persist = true } = {}) {
     if (!isQualityTier(tier)) throw new RangeError(`unknown quality tier: ${tier}`);
-    const changed = this.autoTier !== tier || (this.mode === 'auto' && this.tier !== tier);
-    this.autoTier = tier;
+    const effectiveTier = capTier(tier, this.autoTierCeiling);
+    const changed = this.autoTier !== effectiveTier || (this.mode === 'auto' && this.tier !== effectiveTier);
+    this.autoTier = effectiveTier;
     if (this.mode === 'auto') {
-      this.tier = tier;
+      this.tier = effectiveTier;
       this.settings = this.createSettings();
       this.resetAdaptation();
     }
@@ -259,7 +265,8 @@ export class QualityManager {
         this.lowSamples = 0;
         if (this.highSamples >= this.upshiftSamples) {
           const index = QUALITY_TIERS.indexOf(this.tier);
-          if (index < QUALITY_TIERS.length - 1) {
+          const ceilingIndex = QUALITY_TIERS.indexOf(this.autoTierCeiling);
+          if (index < ceilingIndex) {
             this.autoTier = QUALITY_TIERS[index + 1];
             this.tier = this.autoTier;
             this.settings = this.createSettings();

@@ -6,15 +6,24 @@ import { buildDrivingCourses } from './drivingCourses.js';
 import { buildCaveMineTrain } from './mineTrain.js';
 import { createProceduralRockGeometry, createProceduralRockMaterial } from './proceduralRocks.js';
 import { createQualityManager, QUALITY_MODES } from './core/qualityManager.js';
+import { mergeBufferGeometries as mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ---------- renderer / scene / camera ---------- */
 
-const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const startupQuery = new URLSearchParams(window.location.search);
+const requestedDeviceClass = startupQuery.get('device');
+const isTouchDevice = requestedDeviceClass === 'mobile'
+  || (requestedDeviceClass !== 'desktop' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
 if (isTouchDevice) document.body.classList.add('touch-device');
-const requestedQualityMode = new URLSearchParams(window.location.search).get('quality');
+const requestedQualityMode = startupQuery.get('quality');
 const qualityManager = createQualityManager({
   initialMode: QUALITY_MODES.includes(requestedQualityMode) ? requestedQualityMode : 'auto',
-  initialAutoTier: isTouchDevice ? 'medium' : 'high',
+  initialAutoTier: isTouchDevice ? 'low' : 'medium',
+  autoTierCeiling: isTouchDevice ? 'low' : 'medium',
+  sampleWindowSeconds: 1.5,
+  downshiftSamples: 1,
+  upshiftSamples: 6,
+  storageKey: isTouchDevice ? 'alien-game:quality:mobile:v3' : 'alien-game:quality:desktop:v3',
   devicePixelRatio: window.devicePixelRatio,
 });
 // Explicit query parameters are a deterministic benchmark/debug override and
@@ -46,12 +55,6 @@ function finishLoadingScreen() {
   setLoadingStage(100, 'EXPEDITION READY');
   window.setTimeout(() => loadingScreenEl.classList.add('is-ready'), 180);
   window.setTimeout(() => loadingScreenEl.remove(), 1100);
-  const warmEarthTextures = () => ensureEarthriseTextures();
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(warmEarthTextures, { timeout: 8000 });
-  } else {
-    window.setTimeout(warmEarthTextures, 2500);
-  }
 }
 
 setLoadingStage(18, 'INITIALIZING MARTIAN ATMOSPHERE');
@@ -62,7 +65,10 @@ scene.background = clearSpaceColor.clone();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1600);
 
 const renderer = new THREE.WebGLRenderer({
-  antialias: !isTouchDevice,
+  // WebGL antialiasing is fixed when the context is created. Keep it for the
+  // explicit High preset, while Auto/Medium favor stable frame pacing and use
+  // the renderer's DPR scaling for edge quality instead.
+  antialias: !isTouchDevice && qualitySettings.materialQuality === 'high',
   powerPreference: 'high-performance',
   stencil: false,
 });
@@ -1301,6 +1307,9 @@ function buildSpace() {
 
   buildDistantMoon();
   earthriseRuntime = buildDistantEarth();
+  // Generate this deterministic texture while the loading screen is still up.
+  // Deferring it into an idle callback caused a visible mid-game frame stall.
+  ensureEarthriseTextures();
   buildZephyra();
   buildShootingStar();
 }
@@ -3275,7 +3284,12 @@ function updateOasisLake(dt, time) {
   const oasisRevealDistance = oasisViewerNormal
     ? geodesicDistance(oasisViewerNormal, MARS_OASIS_NORMAL)
     : Infinity;
-  const oasisShouldReveal = oasisRevealDistance <= MARS_OASIS_REVEAL_DISTANCE;
+  // The oasis is geographically close to the Xenobiology Globe, but it sits
+  // outside the sealed habitat and cannot contribute to interior views. It is
+  // also highly detailed and includes transmissive water, so letting this
+  // updater re-enable it would defeat the interior streaming boundary.
+  const oasisShouldReveal = !xenobiologyInteriorCullActive
+    && oasisRevealDistance <= MARS_OASIS_REVEAL_DISTANCE;
   if (oasisLake.root.visible !== oasisShouldReveal) oasisLake.root.visible = oasisShouldReveal;
   if (!oasisShouldReveal) return;
 
@@ -3662,6 +3676,114 @@ buildMountainHomeBranchSign();
 
 function stdMat(color, opts = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1, ...opts });
+}
+
+function collectQualitySensitiveMaterials(root, excludedMaterials = null) {
+  const entries = [];
+  const visited = new Set();
+  root.traverse((object) => {
+    if (!object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach((material) => {
+      if (visited.has(material) || excludedMaterials?.has(material)) return;
+      visited.add(material);
+      if (material.transmission > 0 || (material.transparent && material.side === THREE.DoubleSide)) {
+        entries.push({
+          material,
+          transmission: material.transmission || 0,
+          forceSinglePass: material.forceSinglePass,
+        });
+      }
+    });
+  });
+  return entries;
+}
+
+function applyQualitySensitiveMaterials(entries, useHighQuality) {
+  entries.forEach((entry) => {
+    const nextTransmission = useHighQuality ? entry.transmission : 0;
+    const nextForceSinglePass = useHighQuality ? entry.forceSinglePass : true;
+    if (entry.material.transmission !== nextTransmission) {
+      entry.material.transmission = nextTransmission;
+      entry.material.needsUpdate = true;
+    }
+    entry.material.forceSinglePass = nextForceSinglePass;
+  });
+}
+
+const lowDetailProxyMaterial = new THREE.MeshLambertMaterial({
+  vertexColors: true,
+  emissive: 0x071014,
+  emissiveIntensity: 0.18,
+});
+
+/**
+ * Flattens a small articulated model into one vertex-coloured mesh. The rich
+ * children remain available for explicit High mode; Auto/Medium/Low render the
+ * proxy to avoid dozens of draw calls per creature.
+ */
+function buildLowDetailProxy(root, name, includeMesh = null) {
+  root.updateWorldMatrix(true, true);
+  const inverseRoot = root.matrixWorld.clone().invert();
+  const relativeMatrix = new THREE.Matrix4();
+  const bakedColor = new THREE.Color();
+  const emissiveColor = new THREE.Color();
+  const pieces = [];
+  const originals = [];
+
+  root.traverse((child) => {
+    if (child === root || !child.isMesh || !child.geometry || (includeMesh && !includeMesh(child))) return;
+    originals.push(child);
+    // Dynamic instanced appendages are intentionally omitted from the proxy.
+    if (child.isInstancedMesh) return;
+    const material = Array.isArray(child.material) ? child.material[0] : child.material;
+    if (!material) return;
+    child.updateWorldMatrix(true, false);
+    relativeMatrix.multiplyMatrices(inverseRoot, child.matrixWorld);
+    let source = child.geometry.clone();
+    if (source.index) {
+      const nonIndexed = source.toNonIndexed();
+      source.dispose();
+      source = nonIndexed;
+    }
+    source.applyMatrix4(relativeMatrix);
+    if (!source.attributes.normal) source.computeVertexNormals();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', source.attributes.position.clone());
+    geometry.setAttribute('normal', source.attributes.normal.clone());
+    const count = source.attributes.position.count;
+    const colors = new Float32Array(count * 3);
+    bakedColor.copy(material.color || new THREE.Color(0xffffff));
+    if (material.emissive) {
+      emissiveColor.copy(material.emissive).multiplyScalar(Math.min(0.28, (material.emissiveIntensity || 0) * 0.12));
+      bakedColor.add(emissiveColor);
+    }
+    for (let index = 0; index < count; index += 1) {
+      colors[index * 3] = bakedColor.r;
+      colors[index * 3 + 1] = bakedColor.g;
+      colors[index * 3 + 2] = bakedColor.b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    pieces.push(geometry);
+    source.dispose();
+  });
+
+  const merged = pieces.length ? mergeGeometries(pieces, false) : null;
+  pieces.forEach((geometry) => geometry.dispose());
+  if (!merged) return null;
+  merged.computeBoundingSphere();
+  const proxy = new THREE.Mesh(merged, lowDetailProxyMaterial);
+  proxy.name = `${name} · batched low-detail proxy`;
+  proxy.visible = false;
+  root.add(proxy);
+  return { proxy, originals };
+}
+
+function setLowDetailProxyEnabled(runtime, enabled) {
+  const lowDetail = runtime?.lowDetail;
+  if (!lowDetail || lowDetail.proxy.visible === enabled) return;
+  lowDetail.proxy.visible = enabled;
+  lowDetail.originals.forEach((mesh) => { mesh.visible = !enabled; });
 }
 
 function makeProjectScreenTexture(project, index) {
@@ -4606,8 +4728,10 @@ function buildMarsXenobiologyGlobe(hub) {
     }
 
     creature.position.y = 0.68;
+    const lowDetail = buildLowDetailProxy(creature, spec.name);
     return {
       group: creature,
+      lowDetail,
       body,
       bodyBaseScaleY: body.scale.y,
       wings,
@@ -4675,6 +4799,8 @@ function buildMarsXenobiologyGlobe(hub) {
     depthWrite: false,
   }));
   const habitatGlassEdgesGeometry = new THREE.EdgesGeometry(sharedGeometry.habitatGlass);
+  const highOnlyDetails = [];
+  const lowHiddenDetails = [];
   specimenSpecs.forEach((spec, index) => {
     const slot = habitatSlots[index];
     const habitat = new THREE.Group();
@@ -4703,6 +4829,7 @@ function buildMarsXenobiologyGlobe(hub) {
     displayRing.rotation.x = -Math.PI / 2;
     displayRing.position.y = 0.975;
     habitat.add(displayRing);
+    lowHiddenDetails.push(displayRing);
     const glassMaterialIndex = index % habitatGlassMaterials.length;
     const glassCube = new THREE.Mesh(sharedGeometry.habitatGlass, habitatGlassMaterials[glassMaterialIndex]);
     glassCube.position.y = 3.12;
@@ -4714,6 +4841,7 @@ function buildMarsXenobiologyGlobe(hub) {
     );
     glassEdges.position.y = 3.12;
     habitat.add(glassEdges);
+    highOnlyDetails.push(glassEdges);
     const canopy = new THREE.Mesh(
       sharedGeometry.habitatCanopy,
       stdMat(spec.accent, { emissive: spec.accent, emissiveIntensity: 1.1, metalness: 0.72, roughness: 0.28 })
@@ -4733,6 +4861,7 @@ function buildMarsXenobiologyGlobe(hub) {
       );
       prop.position.set(-1.1 + propIndex * 1.08, 1.08 + propIndex * 0.05, 1.05 - (propIndex % 2) * 2.05);
       habitat.add(prop);
+      highOnlyDetails.push(prop);
     }
     const creatureRuntime = createSpecimenCreature(spec, index);
     creatureRuntime.group.scale.setScalar(1.18);
@@ -4742,6 +4871,7 @@ function buildMarsXenobiologyGlobe(hub) {
     label.position.set(0, 5.78, 0);
     label.scale.set(3.75, 0.52, 1);
     habitat.add(label);
+    lowHiddenDetails.push(label);
 
     const aisleSide = slot.x < 0 ? 1 : -1;
     const plaqueBacking = new THREE.Mesh(
@@ -4901,8 +5031,10 @@ function buildMarsXenobiologyGlobe(hub) {
     });
   }
   monkeyTailMeshes.forEach((instances) => { instances.instanceMatrix.needsUpdate = true; });
+  const monkeyLowDetail = buildLowDetailProxy(monkeyRoot, 'Orbit space monkey');
   const museumMonkey = {
     root: monkeyRoot,
+    lowDetail: monkeyLowDetail,
     torso: monkeyTorso,
     head: monkeyHead,
     arms: monkeyArms,
@@ -5082,6 +5214,7 @@ function buildMarsXenobiologyGlobe(hub) {
   }
   aquariumWallKelp.instanceMatrix.needsUpdate = true;
   aquariumWall.add(aquariumWallKelp);
+  highOnlyDetails.push(aquariumWallKelp);
 
   const aquariumWallFishMaterials = [
     [0xff6bcf, 0x74f7ff],
@@ -5108,9 +5241,11 @@ function buildMarsXenobiologyGlobe(hub) {
     dorsal.position.set(-0.03, 0.41, 0);
     fish.add(dorsal);
     aquariumWall.add(fish);
+    const lowDetail = buildLowDetailProxy(fish, `Perimeter aquarium fish ${index + 1}`);
     return {
       fish,
       tail,
+      lowDetail,
       baseAngle,
       baseY: 3.1 + (index % 5) * 1.9,
       radius: aquariumWallInnerRadius + 1.1 + (index % 3) * 0.56,
@@ -5144,6 +5279,7 @@ function buildMarsXenobiologyGlobe(hub) {
   const aquariumWallBubbles = new THREE.Points(aquariumWallBubbleGeometry, aquariumWallBubbleMaterial);
   aquariumWallBubbles.name = 'Bubbles throughout continuous museum aquarium wall';
   aquariumWall.add(aquariumWallBubbles);
+  lowHiddenDetails.push(aquariumWallBubbles);
   const aquariumWallLabel = makeLabelSprite('360° ALIEN OCEAN WALL · EUROPA BIOSPHERE', '#94ffff');
   aquariumWallLabel.position.set(0, 15.15, -20.1);
   aquariumWallLabel.scale.set(9.2, 0.82, 1);
@@ -5237,6 +5373,7 @@ function buildMarsXenobiologyGlobe(hub) {
     const instances = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7), material, index === 0 ? 6 : 5);
     instances.name = `Panoramic aquarium kelp · ${index === 0 ? 'violet' : 'green'}`;
     aquarium.add(instances);
+    highOnlyDetails.push(instances);
     return instances;
   });
   const aquariumKelpInstanceCounts = [0, 0];
@@ -5289,9 +5426,11 @@ function buildMarsXenobiologyGlobe(hub) {
     const crest = new THREE.Mesh(sharedGeometry.aquariumFishCrest, finMaterial);
     crest.position.set(-0.02, 0.46, 0);
     fish.add(crest);
+    const lowDetail = buildLowDetailProxy(fish, `Panoramic aquarium fish ${fishIndex + 1}`);
     return {
       fish,
       tail,
+      lowDetail,
       baseY: aquariumCenterY + fishSpec.height,
       baseZ: fish.position.z,
       range: fishSpec.range,
@@ -5389,8 +5528,10 @@ function buildMarsXenobiologyGlobe(hub) {
     }
   }
   squidTentacleMeshes.forEach((instances) => { instances.instanceMatrix.needsUpdate = true; });
+  const squidLowDetail = buildLowDetailProxy(aquariumSquidRoot, 'Europa abyssal space squid');
   const aquariumSquid = {
     root: aquariumSquidRoot,
+    lowDetail: squidLowDetail,
     mantle: squidMantle,
     fins: aquariumSquidRoot.children.filter((child) => child.geometry?.type === 'ConeGeometry'),
     tentacleSegments: squidTentacleSegments,
@@ -5420,6 +5561,7 @@ function buildMarsXenobiologyGlobe(hub) {
   });
   const aquariumBubbles = new THREE.Points(bubbleGeometry, bubbleMaterial);
   aquarium.add(aquariumBubbles);
+  lowHiddenDetails.push(aquariumBubbles);
   const aquariumSpec = { name: 'PANORAMIC ALIEN OCEAN · EUROPA DEEP', accent: 0x5af4ff };
   const aquariumPlaque = new THREE.Mesh(
     new THREE.PlaneGeometry(4.6, 1.12),
@@ -5459,6 +5601,7 @@ function buildMarsXenobiologyGlobe(hub) {
   });
   const bioMotes = new THREE.Points(moteGeometry, moteMaterial);
   detailGroup.add(bioMotes);
+  lowHiddenDetails.push(bioMotes);
 
   const cyanLight = new THREE.PointLight(0x70f4ff, 4.4, 52, 2);
   cyanLight.position.set(-14.2, 10.8, 0);
@@ -5471,9 +5614,12 @@ function buildMarsXenobiologyGlobe(hub) {
   landmarkLabel.scale.set(13.2, 1.52, 1);
   group.add(landmarkLabel);
 
+  const qualitySensitiveMaterials = collectQualitySensitiveMaterials(group);
+
   return {
     group,
     detailGroup,
+    habitatHall,
     globe,
     globeMaterial,
     globeRibs,
@@ -5494,6 +5640,9 @@ function buildMarsXenobiologyGlobe(hub) {
     moteMaterial,
     cyanLight,
     violetLight,
+    highOnlyDetails,
+    lowHiddenDetails,
+    qualitySensitiveMaterials,
   };
 }
 
@@ -6820,6 +6969,25 @@ HUBS.forEach((hub) => {
     };
   }
 });
+
+function applyXenobiologyQuality(settings) {
+  const xenobiology = hubRuntime.planetarium;
+  if (!xenobiology) return;
+  const useLowDetailModels = settings.materialQuality !== 'high';
+  xenobiology.creatureRuntimes.forEach((runtime) => setLowDetailProxyEnabled(runtime, useLowDetailModels));
+  xenobiology.aquariumWallFishRuntimes.forEach((runtime) => setLowDetailProxyEnabled(runtime, useLowDetailModels));
+  xenobiology.fishRuntimes.forEach((runtime) => setLowDetailProxyEnabled(runtime, useLowDetailModels));
+  setLowDetailProxyEnabled(xenobiology.museumMonkey, useLowDetailModels);
+  setLowDetailProxyEnabled(xenobiology.aquariumSquid, useLowDetailModels);
+  const showHighDetails = settings.materialQuality === 'high';
+  const showAmbientDetails = settings.creatureDetail > 0.5;
+  applyQualitySensitiveMaterials(xenobiology.qualitySensitiveMaterials, showHighDetails);
+  xenobiology.highOnlyDetails.forEach((object) => { object.visible = showHighDetails; });
+  xenobiology.lowHiddenDetails.forEach((object) => { object.visible = showAmbientDetails; });
+}
+
+applyXenobiologyQuality(qualitySettings);
+qualityManager.subscribe(({ settings }) => applyXenobiologyQuality(settings), { emitCurrent: false });
 setLoadingStage(63, 'LIGHTING THE UNDERMARS');
 
 /* ---------- Mars–Moon shuttle infrastructure ---------- */
@@ -9079,7 +9247,21 @@ function buildAlien() {
   jetpack.add(thrusterFlames);
   alien.add(jetpack);
 
-  return { alien, legs, arms, body, head, thrusterFlames };
+  // Preserve the articulated silhouette while batching the rigid facial,
+  // neck, and jetpack details that otherwise cost dozens of calls everywhere
+  // the third-person character is visible.
+  const articulatedRoots = [body, head, thrusterFlames, ...legs.map((leg) => leg.thigh), ...arms.map((arm) => arm.upper)];
+  const isArticulatedMesh = (mesh) => articulatedRoots.some((root) => {
+    let current = mesh;
+    while (current && current !== alien) {
+      if (current === root) return true;
+      current = current.parent;
+    }
+    return false;
+  });
+  const lowDetail = buildLowDetailProxy(alien, 'Alien rigid details', (mesh) => !isArticulatedMesh(mesh));
+
+  return { alien, legs, arms, body, head, thrusterFlames, lowDetail };
 }
 
 function makeRoverLabel(text, background, foreground) {
@@ -9276,6 +9458,11 @@ function buildMarsRover(driver) {
 }
 
 const alienDriver = buildAlien();
+function applyAlienQuality(settings) {
+  setLowDetailProxyEnabled(alienDriver, settings.materialQuality !== 'high');
+}
+applyAlienQuality(qualitySettings);
+qualityManager.subscribe(({ settings }) => applyAlienQuality(settings), { emitCurrent: false });
 const {
   rover: alien,
   chassis: roverChassis,
@@ -10547,6 +10734,11 @@ function updateMoonFriend(dt, time, activePlayerNormal) {
       moonFriendGrounded = true;
     }
   }
+  if (!worldDetailResidency.moon) {
+    moonFriendRuntime.actor.thrusterFlames.visible = false;
+    moonFriendStatusEl.classList.remove('show');
+    return;
+  }
   const friendThrustersActive = moonFriendActivity.kind === 'hop' && !moonFriendGrounded && moonFriendHopVelocity > 2.2;
   moonFriendRuntime.actor.thrusterFlames.visible = friendThrustersActive;
   if (friendThrustersActive) moonFriendRuntime.actor.thrusterFlames.scale.y = 0.5 + Math.sin(time * 38) * 0.16;
@@ -11601,6 +11793,8 @@ function updateTravelPrompt() {
 /* ---------- camera state ---------- */
 
 const camLookTarget = alien.position.clone();
+const desiredCamPos = new THREE.Vector3();
+const desiredTarget = new THREE.Vector3();
 const interiorCameraSide = new THREE.Vector3();
 const caveCameraLocal = new THREE.Vector3();
 const caveCameraTangent = new THREE.Vector3();
@@ -12021,6 +12215,10 @@ const worldDetailObjects = {
     zephyraGroveRuntime.group,
   ],
 };
+const marsHubGroups = new Set(Object.values(hubRuntime).map((runtime) => runtime.group));
+const xenobiologyInteriorCullObjects = worldDetailObjects.mars.filter((object) => !marsHubGroups.has(object));
+const xenobiologyInteriorVisibility = new Map();
+let xenobiologyInteriorCullActive = false;
 const worldDetailResidency = { mars: null, moon: null, zephyra: null };
 const worldDetailThresholds = {
   mars: { show: 125, hide: 180 },
@@ -12102,12 +12300,69 @@ function updateMarsHubDetailStreaming() {
   }
 }
 
-const performanceQuery = new URLSearchParams(window.location.search);
+// The xenobiology globe is transparent, but the distant Mars surface detail is
+// too small to contribute to its interior views. Temporarily hiding it removes
+// hundreds of draw calls without changing the nearby habitat or planet shell.
+function updateXenobiologyInteriorCulling(shouldCull) {
+  if (shouldCull === xenobiologyInteriorCullActive) return;
+  xenobiologyInteriorCullActive = shouldCull;
+  if (shouldCull) {
+    xenobiologyInteriorVisibility.clear();
+    xenobiologyInteriorCullObjects.forEach((object) => {
+      xenobiologyInteriorVisibility.set(object, object.visible);
+      object.visible = false;
+    });
+    return;
+  }
+  xenobiologyInteriorCullObjects.forEach((object) => {
+    object.visible = Boolean(worldDetailResidency.mars && xenobiologyInteriorVisibility.get(object));
+  });
+  xenobiologyInteriorVisibility.clear();
+}
+
+const performanceQuery = startupQuery;
 const performanceDebugEnabled = performanceQuery.has('perf');
+const performanceDrawProfileEnabled = performanceDebugEnabled && performanceQuery.has('draw-profile');
 const worldDetailStreamingDisabled = performanceDebugEnabled && performanceQuery.has('no-stream');
 const performanceDebugEl = performanceDebugEnabled ? document.createElement('pre') : null;
 let performanceDebugTime = 0;
 let performanceDebugFrames = 0;
+const performanceDrawCalls = new Map();
+const performanceDrawStarts = new WeakMap();
+const xenobiologyQualityMaterialSet = new Set(
+  hubRuntime.planetarium.qualitySensitiveMaterials.map((entry) => entry.material)
+);
+const globalQualitySensitiveMaterials = collectQualitySensitiveMaterials(scene, xenobiologyQualityMaterialSet);
+function applyGlobalMaterialQuality(settings) {
+  applyQualitySensitiveMaterials(globalQualitySensitiveMaterials, settings.materialQuality === 'high');
+}
+applyGlobalMaterialQuality(qualitySettings);
+qualityManager.subscribe(({ settings }) => applyGlobalMaterialQuality(settings), { emitCurrent: false });
+if (performanceDebugEnabled) {
+  window.__ALIEN_GAME_DEBUG__ = { camera, renderer, scene };
+}
+if (performanceDrawProfileEnabled) {
+  const xenobiologyHall = hubRuntime.planetarium.habitatHall;
+  scene.traverse((object) => {
+    if (!object.isMesh && !object.isLine && !object.isPoints && !object.isSprite) return;
+    const beforeRender = object.onBeforeRender;
+    const afterRender = object.onAfterRender;
+    object.onBeforeRender = function profileBeforeRender(...args) {
+      performanceDrawStarts.set(this, renderer.info.render.calls);
+      beforeRender.apply(this, args);
+    };
+    object.onAfterRender = function profileAfterRender(...args) {
+      afterRender.apply(this, args);
+      const drawCalls = renderer.info.render.calls - (performanceDrawStarts.get(this) || 0);
+      let category = this;
+      while (category.parent && category.parent !== scene && category.parent !== xenobiologyHall) {
+        category = category.parent;
+      }
+      const name = category.name || category.type;
+      performanceDrawCalls.set(name, (performanceDrawCalls.get(name) || 0) + drawCalls);
+    };
+  });
+}
 if (performanceDebugEl) {
   performanceDebugEl.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:50;margin:0;padding:9px 11px;color:#bfffe9;background:rgba(2,8,12,.82);border:1px solid rgba(120,255,225,.4);font:600 11px/1.4 monospace;pointer-events:none';
   document.body.appendChild(performanceDebugEl);
@@ -12128,6 +12383,13 @@ function updatePerformanceDebug(dt) {
     qualityMode: qualityManager.mode,
     qualityTier: qualityManager.tier,
     residency: { ...worldDetailResidency },
+    xenobiologyCullActive: xenobiologyInteriorCullActive,
+    xenobiologyCullVisible: xenobiologyInteriorCullObjects.filter((object) => object.visible).length,
+    xenobiologyTransmission: hubRuntime.planetarium.qualitySensitiveMaterials
+      .filter((entry) => entry.material.transmission > 0).length,
+    drawProfile: [...performanceDrawCalls.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 5),
   };
   window.__ALIEN_GAME_PERF__ = snapshot;
   performanceDebugEl.textContent = [
@@ -12136,8 +12398,13 @@ function updatePerformanceDebug(dt) {
     `CALLS ${snapshot.calls} · TRIS ${snapshot.triangles.toLocaleString()}`,
     `GPU GEO ${snapshot.geometries} · TEX ${snapshot.textures}`,
     `DETAIL M:${snapshot.residency.mars ? 'ON' : 'OFF'} L:${snapshot.residency.moon ? 'ON' : 'OFF'} Z:${snapshot.residency.zephyra ? 'ON' : 'OFF'}`,
+    `XENO CULL:${snapshot.xenobiologyCullActive ? 'ON' : 'OFF'} VISIBLE:${snapshot.xenobiologyCullVisible} TX:${snapshot.xenobiologyTransmission}`,
+    ...(snapshot.drawProfile.length
+      ? [`TOP ${snapshot.drawProfile.map(([name, calls]) => `${name}:${calls}`).join(' · ')}`]
+      : []),
     worldDetailStreamingDisabled ? 'STREAMING BYPASS · BENCHMARK' : 'STREAMING ACTIVE',
   ].join('\n');
+  performanceDrawCalls.clear();
   performanceDebugTime = 0;
   performanceDebugFrames = 0;
 }
@@ -12746,6 +13013,12 @@ function animate() {
   if (xenobiologyGlobe.detailGroup.visible !== xenobiologyDetailShouldRender) {
     xenobiologyGlobe.detailGroup.visible = xenobiologyDetailShouldRender;
   }
+  const xenobiologyInteriorCullDistance = xenobiologyInteriorCullActive ? 27 : 23;
+  updateXenobiologyInteriorCulling(Boolean(
+    !worldDetailStreamingDisabled
+    && xenobiologyDetailShouldRender
+    && xenobiologyDetailDistance < xenobiologyInteriorCullDistance
+  ));
   const caveSurfaceDistance = activeMarsNormal ? geodesicDistance(activeMarsNormal, NIGHTFALL_CAVE.normal) : Infinity;
   const caveShouldRender = caveTravelZone !== 'surface' || caveSurfaceDistance < 56;
   if (hubRuntime.nightfall.group.visible !== caveShouldRender) hubRuntime.nightfall.group.visible = caveShouldRender;
@@ -12859,6 +13132,7 @@ function animate() {
             : creature.type === 'butterfly' ? 0.11
               : 0.19 + index * 0.015
       );
+      if (creature.lowDetail?.proxy.visible) return;
       creature.body.scale.y = creature.bodyBaseScaleY * (1 + Math.sin(creaturePulse * 1.35) * 0.018);
       creature.wings.forEach((wing) => {
         wing.mesh.rotation.z = wing.side * (0.42 + Math.sin(t * 18 + creature.phase) * 0.22);
@@ -12897,6 +13171,7 @@ function animate() {
     }
     const monkeyStride = monkeyMoving ? Math.sin(t * 7.2 + museumMonkey.phase) : 0;
     museumMonkey.root.position.y = 0.7 + Math.abs(monkeyStride) * 0.035;
+    if (!museumMonkey.lowDetail?.proxy.visible) {
     museumMonkey.arms.forEach((arm) => {
       arm.pivot.rotation.x = THREE.MathUtils.damp(arm.pivot.rotation.x, monkeyStride * arm.side * 0.62, 9, dt);
     });
@@ -12917,6 +13192,7 @@ function animate() {
       segment.instanceMesh.setMatrixAt(segment.instanceIndex, museumMonkey.tailDummy.matrix);
     });
     museumMonkey.tailMeshes.forEach((instances) => { instances.instanceMatrix.needsUpdate = true; });
+    }
 
     xenobiologyGlobe.aquariumWallFishRuntimes.forEach((fishRuntime) => {
       const swimPhase = t * fishRuntime.speed + fishRuntime.phase;
@@ -12929,9 +13205,13 @@ function animate() {
       );
       fishRuntime.fish.rotation.y = wallAngle + (swimDirection < 0 ? Math.PI : 0);
       fishRuntime.fish.rotation.z = -swimDirection * Math.cos(swimPhase) * 0.055;
-      fishRuntime.tail.rotation.x = Math.sin(t * 7.2 + fishRuntime.phase) * 0.3;
+      if (!fishRuntime.lowDetail?.proxy.visible) {
+        fishRuntime.tail.rotation.x = Math.sin(t * 7.2 + fishRuntime.phase) * 0.3;
+      }
     });
-    xenobiologyGlobe.aquariumWallBubbles.rotation.y = Math.sin(t * 0.18) * 0.028;
+    if (xenobiologyGlobe.aquariumWallBubbles.visible) {
+      xenobiologyGlobe.aquariumWallBubbles.rotation.y = Math.sin(t * 0.18) * 0.028;
+    }
     xenobiologyGlobe.aquariumWallBubbleMaterial.opacity = 0.63 + Math.sin(t * 1.2) * 0.08;
     xenobiologyGlobe.aquariumWallWaterMaterial.emissiveIntensity = 0.54 + Math.sin(t * 0.56) * 0.07;
 
@@ -12943,7 +13223,9 @@ function animate() {
       fishRuntime.fish.position.z = fishRuntime.baseZ + Math.cos(swimPhase * 0.7) * 0.34;
       fishRuntime.fish.rotation.y = swimDirection >= 0 ? 0 : Math.PI;
       fishRuntime.fish.rotation.z = Math.sin(t * 2.1 + fishRuntime.phase) * 0.06;
-      fishRuntime.tail.rotation.x = Math.sin(t * 7.5 + fishRuntime.phase) * 0.26;
+      if (!fishRuntime.lowDetail?.proxy.visible) {
+        fishRuntime.tail.rotation.x = Math.sin(t * 7.5 + fishRuntime.phase) * 0.26;
+      }
     });
     const aquariumSquid = xenobiologyGlobe.aquariumSquid;
     const squidSwimPhase = t * 0.42 + aquariumSquid.phase;
@@ -12952,6 +13234,7 @@ function animate() {
     aquariumSquid.root.position.z = 0.62 + Math.cos(squidSwimPhase * 1.3) * 0.24;
     aquariumSquid.root.rotation.y = Math.sin(squidSwimPhase * 0.7) * 0.28;
     aquariumSquid.root.rotation.z = Math.sin(t * 0.66 + aquariumSquid.phase) * 0.08;
+    if (!aquariumSquid.lowDetail?.proxy.visible) {
     aquariumSquid.mantle.scale.y = 1.5 * (1 + Math.sin(t * 2.2 + aquariumSquid.phase) * 0.075);
     aquariumSquid.fins.forEach((fin, finIndex) => {
       fin.rotation.y = Math.sin(t * 2.6 + finIndex * Math.PI + aquariumSquid.phase) * 0.24;
@@ -12974,10 +13257,13 @@ function animate() {
       segment.instanceMesh.setMatrixAt(segment.instanceIndex, aquariumSquid.tentacleDummy.matrix);
     });
     aquariumSquid.tentacleMeshes.forEach((instances) => { instances.instanceMatrix.needsUpdate = true; });
+    }
     xenobiologyGlobe.aquariumWater.rotation.y = Math.sin(t * 0.3) * 0.006;
-    xenobiologyGlobe.aquariumBubbles.rotation.y = Math.sin(t * 0.22) * 0.045;
+    if (xenobiologyGlobe.aquariumBubbles.visible) {
+      xenobiologyGlobe.aquariumBubbles.rotation.y = Math.sin(t * 0.22) * 0.045;
+    }
     xenobiologyGlobe.bubbleMaterial.opacity = 0.62 + Math.sin(t * 1.45) * 0.1;
-    xenobiologyGlobe.bioMotes.rotation.y += dt * 0.018;
+    if (xenobiologyGlobe.bioMotes.visible) xenobiologyGlobe.bioMotes.rotation.y += dt * 0.018;
     xenobiologyGlobe.moteMaterial.opacity = 0.48 + Math.sin(t * 0.9) * 0.09;
     xenobiologyGlobe.cyanLight.intensity = 4.1 + Math.sin(t * 1.2) * 0.5;
     xenobiologyGlobe.violetLight.intensity = 3.5 + Math.cos(t * 1.05) * 0.45;
@@ -13032,8 +13318,6 @@ function animate() {
   distortedSun.lookAt(camera.position);
   updateShootingStar(t);
 
-  let desiredCamPos;
-  let desiredTarget;
   let desiredCameraUp;
   if (travelMode === 'mine-train') {
     const trainRoot = hubRuntime.nightfall.mineTrain.train;
@@ -13042,18 +13326,18 @@ function animate() {
     mineTrainCameraForward.set(0, 0, -1).transformDirection(trainRoot.matrixWorld).normalize();
     mineTrainCameraUp.set(0, 1, 0).transformDirection(trainRoot.matrixWorld).normalize();
     const cameraTrail = lookingAtCamera ? 8.5 : -10.8;
-    desiredCamPos = mineTrainCameraPosition.clone()
+    desiredCamPos.copy(mineTrainCameraPosition)
       .addScaledVector(mineTrainCameraUp, 5.2)
       .addScaledVector(mineTrainCameraForward, cameraTrail);
-    desiredTarget = mineTrainCameraPosition.clone()
+    desiredTarget.copy(mineTrainCameraPosition)
       .addScaledVector(mineTrainCameraUp, 1.65)
       .addScaledVector(mineTrainCameraForward, lookingAtCamera ? -1.2 : 4.2);
     desiredCameraUp = mineTrainCameraUp;
   } else if (travelMode === 'cave-walking') {
-    desiredCamPos = footRoot.position.clone()
+    desiredCamPos.copy(footRoot.position)
       .addScaledVector(caveFootWorldUp, lookingAtCamera ? 4.4 : 5.2)
       .addScaledVector(caveFootWorldForward, lookingAtCamera ? 6.8 : -8.4);
-    desiredTarget = footRoot.position.clone()
+    desiredTarget.copy(footRoot.position)
       .addScaledVector(caveFootWorldUp, 1.85)
       .addScaledVector(caveFootWorldForward, lookingAtCamera ? -0.4 : 3.2);
     desiredCameraUp = caveFootWorldUp;
@@ -13078,16 +13362,16 @@ function animate() {
         caveCameraLocal.addScaledVector(caveCameraTangent, unclampedCameraDistance - CAVE_ROUTE_LENGTH);
       }
       caveCameraLocal.addScaledVector(caveCameraRight, caveLateral).addScaledVector(UP, lookingAtCamera ? 3.8 : 4.9);
-      desiredCamPos = caveCameraLocal.clone();
+      desiredCamPos.copy(caveCameraLocal);
       hubRuntime.nightfall.group.localToWorld(desiredCamPos);
-      desiredTarget = alien.position.clone().addScaledVector(caveWorldUp, 1.8).addScaledVector(caveWorldForward, lookingAtCamera ? -2.4 : 3.4);
+      desiredTarget.copy(alien.position).addScaledVector(caveWorldUp, 1.8).addScaledVector(caveWorldForward, lookingAtCamera ? -2.4 : 3.4);
       desiredCameraUp = caveWorldUp;
     } else if (caveTravelZone === 'chamber') {
       const cameraHeight = lookingAtCamera ? 8.2 : 10.8;
       const cameraTrail = lookingAtCamera ? 10 : -14;
-      desiredCamPos = alien.position.clone().addScaledVector(caveWorldUp, cameraHeight).addScaledVector(caveWorldForward, cameraTrail);
+      desiredCamPos.copy(alien.position).addScaledVector(caveWorldUp, cameraHeight).addScaledVector(caveWorldForward, cameraTrail);
       if (!lookingAtCamera) desiredCamPos.addScaledVector(caveWorldRight, 3.2);
-      desiredTarget = alien.position.clone().addScaledVector(caveWorldUp, 2.1).addScaledVector(caveWorldForward, 6);
+      desiredTarget.copy(alien.position).addScaledVector(caveWorldUp, 2.1).addScaledVector(caveWorldForward, 6);
       desiredCameraUp = caveWorldUp;
     } else {
       const cameraHeight = garageDepartureCamera
@@ -13096,27 +13380,27 @@ function animate() {
       const cameraTrail = garageDepartureCamera
         ? 12.5
         : lookingAtCamera ? Math.abs(activeProfile.cameraTrail) * 0.72 : activeProfile.cameraTrail;
-      desiredCamPos = alien.position.clone().addScaledVector(playerNormal, cameraHeight).addScaledVector(playerHeading, cameraTrail);
-      desiredTarget = alien.position.clone().addScaledVector(playerNormal, 2.2).addScaledVector(playerHeading, lookingAtCamera ? 0 : 3.2);
+      desiredCamPos.copy(alien.position).addScaledVector(playerNormal, cameraHeight).addScaledVector(playerHeading, cameraTrail);
+      desiredTarget.copy(alien.position).addScaledVector(playerNormal, 2.2).addScaledVector(playerHeading, lookingAtCamera ? 0 : 3.2);
       desiredCameraUp = playerNormal;
     }
   } else if (travelMode === 'boating') {
     const boat = oasisLake.boat;
     const cameraHeight = lookingAtCamera ? 7.2 : 10.8;
     const cameraTrail = lookingAtCamera ? 11.5 : -14.5;
-    desiredCamPos = boat.root.position.clone()
+    desiredCamPos.copy(boat.root.position)
       .addScaledVector(boat.normal, cameraHeight)
       .addScaledVector(boat.heading, cameraTrail);
-    desiredTarget = boat.root.position.clone()
+    desiredTarget.copy(boat.root.position)
       .addScaledVector(boat.normal, 1.65)
       .addScaledVector(boat.heading, lookingAtCamera ? -1.4 : 4.2);
     desiredCameraUp = boat.normal;
   } else if (travelMode === 'walking') {
     if (ufoInteriorActive) {
-      desiredCamPos = footRoot.position.clone()
+      desiredCamPos.copy(footRoot.position)
         .addScaledVector(footNormal, lookingAtCamera ? 4.15 : 4.8)
         .addScaledVector(footHeading, lookingAtCamera ? 6.2 : -7.8);
-      desiredTarget = footRoot.position.clone()
+      desiredTarget.copy(footRoot.position)
         .addScaledVector(footNormal, 1.8)
         .addScaledVector(footHeading, lookingAtCamera ? -0.4 : 3.2);
       desiredCameraUp = footNormal;
@@ -13148,40 +13432,40 @@ function animate() {
       );
       commandTargetHeight = THREE.MathUtils.lerp(commandTargetHeight, 1.9, alienHomeInterior);
       commandTargetLead = THREE.MathUtils.lerp(commandTargetLead, lookingAtCamera ? 0 : 2.2, alienHomeInterior);
-      desiredCamPos = footRoot.position.clone()
+      desiredCamPos.copy(footRoot.position)
         .addScaledVector(footNormal, cameraHeight)
         .addScaledVector(footHeading, cameraTrail);
       if (!lookingAtCamera && moonCommandInterior > 0.01) {
         interiorCameraSide.copy(footHeading).cross(footNormal).normalize();
         desiredCamPos.addScaledVector(interiorCameraSide, moonCommandInterior * 2.35);
       }
-      desiredTarget = footRoot.position.clone().addScaledVector(footNormal, commandTargetHeight).addScaledVector(footHeading, commandTargetLead);
+      desiredTarget.copy(footRoot.position).addScaledVector(footNormal, commandTargetHeight).addScaledVector(footHeading, commandTargetLead);
       desiredCameraUp = footNormal;
     }
   } else if (travelMode === 'hyperbike') {
     if (hyperBikeTransit) {
-      desiredCamPos = hyperBike.position.clone()
+      desiredCamPos.copy(hyperBike.position)
         .addScaledVector(hyperBikeFlightDirection, -19)
         .addScaledVector(hyperBikeFlightUp, 8.5);
-      desiredTarget = hyperBike.position.clone().addScaledVector(hyperBikeFlightDirection, 5.5);
+      desiredTarget.copy(hyperBike.position).addScaledVector(hyperBikeFlightDirection, 5.5);
       desiredCameraUp = hyperBikeFlightUp;
     } else {
       const dockNormal = hyperBikeDockNormal(hyperBikeLocation);
       const dockHeading = hyperBikeLocation === 'zephyra' ? ZEPHYRA_BIKE_HEADING : MOON_BIKE_HEADING;
-      desiredCamPos = hyperBike.position.clone().addScaledVector(dockNormal, 7.5).addScaledVector(dockHeading, -12);
-      desiredTarget = hyperBike.position.clone().addScaledVector(dockNormal, 2.1);
+      desiredCamPos.copy(hyperBike.position).addScaledVector(dockNormal, 7.5).addScaledVector(dockHeading, -12);
+      desiredTarget.copy(hyperBike.position).addScaledVector(dockNormal, 2.1);
       desiredCameraUp = dockNormal;
     }
   } else {
     if (shuttleTransit) {
-      desiredCamPos = moonShuttle.position.clone().addScaledVector(shuttleFlightDirection, -28).addScaledVector(UP, 32);
-      desiredTarget = moonShuttle.position.clone().addScaledVector(shuttleFlightDirection, 2.5);
+      desiredCamPos.copy(moonShuttle.position).addScaledVector(shuttleFlightDirection, -28).addScaledVector(UP, 32);
+      desiredTarget.copy(moonShuttle.position).addScaledVector(shuttleFlightDirection, 2.5);
       desiredCameraUp = UP;
     } else {
       const dockNormal = shuttleLocation === 'moon' ? MOON_PAD_NORMAL : MARS_PORT.normal;
       const dockHeading = tangentHeadingForNormal(dockNormal);
-      desiredCamPos = moonShuttle.position.clone().addScaledVector(dockNormal, 14).addScaledVector(dockHeading, -18);
-      desiredTarget = moonShuttle.position.clone().addScaledVector(dockNormal, 3.2);
+      desiredCamPos.copy(moonShuttle.position).addScaledVector(dockNormal, 14).addScaledVector(dockHeading, -18);
+      desiredTarget.copy(moonShuttle.position).addScaledVector(dockNormal, 3.2);
       desiredCameraUp = dockNormal;
     }
   }
