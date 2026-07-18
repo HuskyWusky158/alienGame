@@ -11,6 +11,10 @@ function getSharedAssets() {
   hubGeometry.rotateZ(Math.PI / 2);
   const roadWheelGeometry = new THREE.CylinderGeometry(0.48, 0.48, 0.25, 14);
   roadWheelGeometry.rotateZ(Math.PI / 2);
+  const treadGeometry = new THREE.BoxGeometry(0.36, 0.16, 0.62);
+  const crawlerBounds = new THREE.Sphere(new THREE.Vector3(0, 1.05, 0), 3.75);
+  treadGeometry.boundingSphere = crawlerBounds.clone();
+  roadWheelGeometry.boundingSphere = crawlerBounds.clone();
 
   sharedAssets = {
     geometries: {
@@ -19,11 +23,12 @@ function getSharedAssets() {
       tire: tireGeometry,
       hub: hubGeometry,
       roadWheel: roadWheelGeometry,
-      tread: new THREE.BoxGeometry(0.36, 0.16, 0.62),
+      tread: treadGeometry,
       smallNozzle: new THREE.CylinderGeometry(0.18, 0.26, 0.5, 10),
       flame: new THREE.ConeGeometry(0.2, 1.25, 9, 1, true),
       hoverPad: new THREE.CylinderGeometry(0.62, 0.72, 0.2, 16),
       lowPolySphere: new THREE.SphereGeometry(1, 18, 10),
+      beacon: new THREE.SphereGeometry(0.18, 10, 7),
     },
     materials: {
       tire: new THREE.MeshStandardMaterial({ color: 0x111316, roughness: 0.96, metalness: 0.08 }),
@@ -91,6 +96,12 @@ function makeFlameMaterial(color) {
     depthWrite: false,
     toneMapped: false,
   });
+}
+
+function disposeOwnedMaterials(ownedMaterials) {
+  for (let index = 0; index < ownedMaterials.length; index++) {
+    ownedMaterials[index].dispose();
+  }
 }
 
 export function buildRockhopper(options = {}) {
@@ -169,13 +180,21 @@ export function buildRockhopper(options = {}) {
   function updateMotion({ distance = wheelDistance, steering = 0, thrust = 0, time = 0 } = {}) {
     const deltaDistance = distance - wheelDistance;
     wheelDistance = distance;
-    wheels.forEach((wheel) => { wheel.rotation.x -= deltaDistance / 0.72; });
-    frontWheelMounts.forEach((mount) => { mount.rotation.y = THREE.MathUtils.clamp(steering, -1, 1) * 0.42; });
+    for (let index = 0; index < wheels.length; index++) {
+      wheels[index].rotation.x -= deltaDistance / 0.72;
+    }
+    const steeringAngle = THREE.MathUtils.clamp(steering, -1, 1) * 0.42;
+    for (let index = 0; index < frontWheelMounts.length; index++) {
+      frontWheelMounts[index].rotation.y = steeringAngle;
+    }
     const thrustLevel = THREE.MathUtils.clamp(thrust, 0, 1);
     thrusterFlames.visible = thrustLevel > 0.01;
     thrusterFlames.scale.y = 0.45 + thrustLevel * 0.75 + Math.sin(time * 38) * thrustLevel * 0.08;
     thrusterMaterial.opacity = 0.58 + thrustLevel * 0.32;
   }
+  const ownedMaterials = [thrusterMaterial];
+  if (bodyMaterial !== materials.rockhopperBody) ownedMaterials.push(bodyMaterial);
+  const dispose = () => disposeOwnedMaterials(ownedMaterials);
 
   return {
     kind: 'rockhopper',
@@ -193,6 +212,7 @@ export function buildRockhopper(options = {}) {
     thrusterFlames,
     thrusterMaterial,
     updateMotion,
+    dispose,
   };
 }
 
@@ -234,9 +254,8 @@ export function buildDustcrawler(options = {}) {
   const treadCount = options.treadSegments ?? 28;
   const leftTread = new THREE.InstancedMesh(geometries.tread, materials.tire, treadCount);
   const rightTread = new THREE.InstancedMesh(geometries.tread, materials.tire, treadCount);
-  const crawlerBounds = new THREE.Sphere(new THREE.Vector3(0, 1.05, 0), 3.75);
-  geometries.tread.boundingSphere = crawlerBounds.clone();
-  geometries.roadWheel.boundingSphere = crawlerBounds.clone();
+  leftTread.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  rightTread.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   leftTread.frustumCulled = true;
   rightTread.frustumCulled = true;
   leftTread.name = 'Dustcrawler left animated tread';
@@ -247,6 +266,7 @@ export function buildDustcrawler(options = {}) {
 
   const roadWheelCount = 12;
   const roadWheels = new THREE.InstancedMesh(geometries.roadWheel, materials.darkMetal, roadWheelCount);
+  roadWheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   roadWheels.frustumCulled = true;
   roadWheels.name = 'Dustcrawler batched road wheels';
   const roadWheelDummy = new THREE.Object3D();
@@ -255,12 +275,13 @@ export function buildDustcrawler(options = {}) {
     [-2.05, -1.23, -0.41, 0.41, 1.23, 2.05].forEach((z) => roadWheelPositions.push({ side, z }));
   });
   function updateRoadWheels(distance) {
-    roadWheelPositions.forEach(({ side, z }, index) => {
+    for (let index = 0; index < roadWheelPositions.length; index++) {
+      const { side, z } = roadWheelPositions[index];
       roadWheelDummy.position.set(side * 2.04, 0.9, z);
       roadWheelDummy.rotation.set(-distance / 0.48, 0, 0);
       roadWheelDummy.updateMatrix();
       roadWheels.setMatrixAt(index, roadWheelDummy.matrix);
-    });
+    }
     roadWheels.instanceMatrix.needsUpdate = true;
   }
   updateRoadWheels(0);
@@ -278,7 +299,7 @@ export function buildDustcrawler(options = {}) {
     roughness: 0.25,
     toneMapped: false,
   });
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 7), beaconMaterial);
+  const beacon = new THREE.Mesh(geometries.beacon, beaconMaterial);
   beacon.position.set(0, 3.08, -1.42);
   body.add(beacon);
   const seat = new THREE.Group();
@@ -286,14 +307,21 @@ export function buildDustcrawler(options = {}) {
   body.add(seat);
 
   let treadDistance = 0;
+  let treadTurn = 0;
   function updateMotion({ distance = treadDistance, steering = 0, time = 0 } = {}) {
-    treadDistance = distance;
     const turn = THREE.MathUtils.clamp(steering, -1, 1) * 0.24;
-    fillTreadInstances(leftTread, -1, distance / 0.66 + turn, treadDummy);
-    fillTreadInstances(rightTread, 1, distance / 0.66 - turn, treadDummy);
-    updateRoadWheels(distance);
+    if (distance !== treadDistance || turn !== treadTurn) {
+      treadDistance = distance;
+      treadTurn = turn;
+      fillTreadInstances(leftTread, -1, distance / 0.66 + turn, treadDummy);
+      fillTreadInstances(rightTread, 1, distance / 0.66 - turn, treadDummy);
+      updateRoadWheels(distance);
+    }
     beaconMaterial.emissiveIntensity = 1.15 + (Math.sin(time * 5.2) * 0.5 + 0.5) * 1.35;
   }
+  const ownedMaterials = [beaconMaterial];
+  if (bodyMaterial !== materials.crawlerBody) ownedMaterials.push(bodyMaterial);
+  const dispose = () => disposeOwnedMaterials(ownedMaterials);
 
   return {
     kind: 'dustcrawler',
@@ -309,6 +337,7 @@ export function buildDustcrawler(options = {}) {
     beacon,
     beaconMaterial,
     updateMotion,
+    dispose,
   };
 }
 
@@ -390,15 +419,19 @@ export function buildZephyrSkimmer(options = {}) {
     driftRoot.rotation.z = THREE.MathUtils.lerp(driftRoot.rotation.z, -steer * (0.12 + speedLevel * 0.14), 0.12);
     driftRoot.rotation.x = Math.sin(time * 1.2) * 0.012 - speedLevel * 0.025;
     hoverMaterial.emissiveIntensity = 1.15 + Math.sin(time * 4.6) * 0.22 + speedLevel * 0.8;
-    hoverPads.forEach((pad, index) => {
+    for (let index = 0; index < hoverPads.length; index++) {
+      const pad = hoverPads[index];
       const pulse = 1 + Math.sin(time * 5.4 + index * 1.45) * 0.05;
       pad.scale.setScalar(pulse);
-    });
+    }
     const thrustLevel = THREE.MathUtils.clamp(Math.max(thrust, speedLevel * 0.65), 0, 1);
     thrusterFlames.visible = thrustLevel > 0.02;
     thrusterFlames.scale.y = 0.35 + thrustLevel * 0.95 + Math.sin(time * 44) * thrustLevel * 0.07;
     thrusterMaterial.opacity = 0.52 + thrustLevel * 0.38;
   }
+  const ownedMaterials = [hoverMaterial, thrusterMaterial];
+  if (bodyMaterial !== materials.skimmerBody) ownedMaterials.push(bodyMaterial);
+  const dispose = () => disposeOwnedMaterials(ownedMaterials);
 
   return {
     kind: 'zephyr-skimmer',
@@ -416,6 +449,7 @@ export function buildZephyrSkimmer(options = {}) {
     thrusterFlames,
     thrusterMaterial,
     updateMotion,
+    dispose,
   };
 }
 
@@ -436,11 +470,17 @@ export function buildMarsVehicleSuite(options = {}) {
   rockhopper.root.position.x -= spacing;
   zephyrSkimmer.root.position.x += spacing;
   root.add(rockhopper.root, dustcrawler.root, zephyrSkimmer.root);
+  function dispose() {
+    rockhopper.dispose();
+    dustcrawler.dispose();
+    zephyrSkimmer.dispose();
+  }
   return {
     root,
     vehicles: [rockhopper, dustcrawler, zephyrSkimmer],
     rockhopper,
     dustcrawler,
     zephyrSkimmer,
+    dispose,
   };
 }

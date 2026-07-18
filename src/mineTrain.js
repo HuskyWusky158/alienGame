@@ -2,15 +2,19 @@ import * as THREE_NS from 'three';
 
 const DEFAULT_UP = new THREE_NS.Vector3(0, 1, 0);
 
-function curveFrame(THREE, curve, ratio, up, target = {}) {
-  const point = target.point || new THREE.Vector3();
-  const tangent = target.tangent || new THREE.Vector3();
-  const right = target.right || new THREE.Vector3();
+function curveFrame(THREE, curve, ratio, up, target = null) {
+  const frame = target || {};
+  const point = frame.point || new THREE.Vector3();
+  const tangent = frame.tangent || new THREE.Vector3();
+  const right = frame.right || new THREE.Vector3();
+  frame.point = point;
+  frame.tangent = tangent;
+  frame.right = right;
   curve.getPointAt(ratio, point);
   curve.getTangentAt(ratio, tangent).normalize();
   right.crossVectors(tangent, up).normalize();
   if (right.lengthSq() < 0.5) right.set(1, 0, 0);
-  return { point, tangent, right };
+  return frame;
 }
 
 function makeRouteOffsetCurve(THREE, curve, lateral, lift, samples, up) {
@@ -183,6 +187,7 @@ export function buildCaveMineTrain({
     tieDummy.updateMatrix();
     ties.setMatrixAt(index, tieDummy.matrix);
   }
+  ties.instanceMatrix.setUsage(THREE.StaticDrawUsage);
   ties.instanceMatrix.needsUpdate = true;
   // This project currently uses a Three.js release without
   // InstancedMesh.computeBoundingSphere(). The railway is streamed as one cave
@@ -323,7 +328,9 @@ export function buildCaveMineTrain({
     const deltaDistance = hasUpdated ? clampedDistance - lastDistance : 0;
     const signedTravel = Number.isFinite(speed) ? speed * Math.max(0, dt) : deltaDistance;
     wheelRotation += signedTravel / 0.47;
-    wheelGroups.forEach((wheel) => { wheel.rotation.x = wheelRotation; });
+    for (let index = 0; index < wheelGroups.length; index++) {
+      wheelGroups[index].rotation.x = wheelRotation;
+    }
 
     const motion = Math.min(1, Math.abs(Number.isFinite(speed) ? speed : deltaDistance * 60) / 8);
     sprungBody.position.y = Math.sin(time * 10.5) * 0.025 * motion;

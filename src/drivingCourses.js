@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 
 const UP = new THREE.Vector3(0, 1, 0);
+const BACK = new THREE.Vector3(0, 0, -1);
 
 function tangentBasis(normal) {
-  const reference = Math.abs(normal.y) < 0.9 ? UP : new THREE.Vector3(0, 0, -1);
+  const reference = Math.abs(normal.y) < 0.9 ? UP : BACK;
   const forward = reference.clone().addScaledVector(normal, -reference.dot(normal)).normalize();
   const right = forward.clone().cross(normal).normalize();
   return { forward, right };
@@ -48,6 +49,7 @@ function buildRoadGeometry(course, {
   const indices = [];
   const tangent = new THREE.Vector3();
   const right = new THREE.Vector3();
+  const axis = new THREE.Vector3();
   const sideNormal = new THREE.Vector3();
   const worldPosition = new THREE.Vector3();
 
@@ -55,12 +57,13 @@ function buildRoadGeometry(course, {
     const normal = routeNormals[index];
     const previous = routeNormals[(index - 1 + steps) % steps];
     const next = routeNormals[(index + 1) % steps];
-    tangent.copy(next).sub(previous).addScaledVector(normal, -next.clone().sub(previous).dot(normal)).normalize();
+    tangent.copy(next).sub(previous);
+    tangent.addScaledVector(normal, -tangent.dot(normal)).normalize();
     right.copy(tangent).cross(normal).normalize();
+    axis.crossVectors(normal, right).normalize();
     const texturePulse = 0.9 + Math.sin(index * 1.77 + course.phase) * 0.055;
     lanes.forEach((lateral, laneIndex) => {
       const sideAngle = lateral / radius;
-      const axis = new THREE.Vector3().crossVectors(normal, right).normalize();
       sideNormal.copy(normal).applyAxisAngle(axis, sideAngle).normalize();
       worldPosition.copy(surfacePosition(sideNormal, (course.lift ?? 0.12) + (laneIndex === 2 ? 0.012 : 0)));
       positions.push(worldPosition.x, worldPosition.y, worldPosition.z);
@@ -99,12 +102,12 @@ function buildRoadGeometry(course, {
   return { mesh, routeNormals, steps };
 }
 
-function matrixAtSurface(dummy, position, normal, tangent, scale, lateral = 0, vertical = 0) {
-  const right = tangent.clone().cross(normal).normalize();
-  const back = tangent.clone().multiplyScalar(-1);
-  const matrix = new THREE.Matrix4().makeBasis(right, normal, back);
-  dummy.position.copy(position).addScaledVector(right, lateral).addScaledVector(normal, vertical);
-  dummy.quaternion.setFromRotationMatrix(matrix);
+function matrixAtSurface(dummy, position, normal, tangent, scale, scratch, lateral = 0, vertical = 0) {
+  scratch.right.copy(tangent).cross(normal).normalize();
+  scratch.back.copy(tangent).multiplyScalar(-1);
+  scratch.matrix.makeBasis(scratch.right, normal, scratch.back);
+  dummy.position.copy(position).addScaledVector(scratch.right, lateral).addScaledVector(normal, vertical);
+  dummy.quaternion.setFromRotationMatrix(scratch.matrix);
   dummy.scale.copy(scale);
   dummy.updateMatrix();
   return dummy.matrix;
@@ -158,6 +161,13 @@ export function buildDrivingCourses({
   const dummy = new THREE.Object3D();
   const tangent = new THREE.Vector3();
   const position = new THREE.Vector3();
+  const matrixScratch = {
+    right: new THREE.Vector3(),
+    back: new THREE.Vector3(),
+    matrix: new THREE.Matrix4(),
+  };
+  const instanceColor = new THREE.Color();
+  const rampBaseColor = new THREE.Color(0x4b241c);
 
   definitions.forEach((definition) => {
     const centerNormal = normalFromCoords(definition.center[0], definition.center[1]);
@@ -186,7 +196,8 @@ export function buildDrivingCourses({
       const normal = course.routeNormals[routeIndex].clone();
       const previous = course.routeNormals[(routeIndex - 1 + course.steps) % course.steps];
       const next = course.routeNormals[(routeIndex + 1) % course.steps];
-      const routeTangent = next.clone().sub(previous).addScaledVector(normal, -next.clone().sub(previous).dot(normal)).normalize();
+      const routeTangent = next.clone().sub(previous);
+      routeTangent.addScaledVector(normal, -routeTangent.dot(normal)).normalize();
       const checkpoint = { normal, tangent: routeTangent, index: checkpointIndex };
       course.checkpoints.push(checkpoint);
       gateRecords.push({ course, checkpoint, start: checkpointIndex === 0 });
@@ -209,7 +220,8 @@ export function buildDrivingCourses({
       const normal = course.routeNormals[index];
       const previous = course.routeNormals[(index - 1 + course.steps) % course.steps];
       const next = course.routeNormals[(index + 1) % course.steps];
-      const routeTangent = next.clone().sub(previous).addScaledVector(normal, -next.clone().sub(previous).dot(normal)).normalize();
+      const routeTangent = next.clone().sub(previous);
+      routeTangent.addScaledVector(normal, -routeTangent.dot(normal)).normalize();
       markerRecords.push({ course, normal: normal.clone(), tangent: routeTangent, side: -1 });
       markerRecords.push({ course, normal: normal.clone(), tangent: routeTangent, side: 1 });
     }
@@ -248,10 +260,11 @@ export function buildDrivingCourses({
         checkpoint.normal,
         checkpoint.tangent,
         new THREE.Vector3(start ? 0.28 : 0.18, postHeight, start ? 0.28 : 0.18),
+        matrixScratch,
         side * halfWidth,
         postHeight * 0.5
       ));
-      gateBatch.setColorAt(gateInstance, new THREE.Color(start ? 0xffffff : course.accentColor));
+      gateBatch.setColorAt(gateInstance, instanceColor.set(start ? 0xffffff : course.accentColor));
       gateInstance++;
     });
     gateBatch.setMatrixAt(gateInstance, matrixAtSurface(
@@ -260,10 +273,11 @@ export function buildDrivingCourses({
       checkpoint.normal,
       checkpoint.tangent,
       new THREE.Vector3(halfWidth * 2 + 0.28, start ? 0.3 : 0.2, start ? 0.3 : 0.2),
+      matrixScratch,
       0,
       postHeight
     ));
-    gateBatch.setColorAt(gateInstance, new THREE.Color(start ? 0xffffff : course.accentColor));
+    gateBatch.setColorAt(gateInstance, instanceColor.set(start ? 0xffffff : course.accentColor));
     gateInstance++;
   });
   gateBatch.instanceMatrix.setUsage(THREE.StaticDrawUsage);
@@ -296,10 +310,11 @@ export function buildDrivingCourses({
       start.normal,
       start.tangent,
       new THREE.Vector3(1, 1, 1),
+      matrixScratch,
       0,
       14
     ));
-    beaconBatch.setColorAt(index, new THREE.Color(course.accentColor));
+    beaconBatch.setColorAt(index, instanceColor.set(course.accentColor));
   });
   beaconBatch.instanceMatrix.setUsage(THREE.StaticDrawUsage);
   beaconBatch.instanceMatrix.needsUpdate = true;
@@ -317,10 +332,11 @@ export function buildDrivingCourses({
       normal,
       routeTangent,
       new THREE.Vector3(0.16, 0.12, 0.62),
+      matrixScratch,
       side * (course.width + 0.38),
       0.1
     ));
-    markerBatch.setColorAt(index, new THREE.Color(course.accentColor));
+    markerBatch.setColorAt(index, instanceColor.set(course.accentColor));
   });
   markerBatch.instanceMatrix.setUsage(THREE.StaticDrawUsage);
   markerBatch.instanceMatrix.needsUpdate = true;
@@ -344,9 +360,10 @@ export function buildDrivingCourses({
       position,
       zone.normal,
       zone.tangent,
-      new THREE.Vector3(course.width * 1.25, 0.08, 3.2)
+      new THREE.Vector3(course.width * 1.25, 0.08, 3.2),
+      matrixScratch
     ));
-    boostBatch.setColorAt(index, new THREE.Color(course.accentColor));
+    boostBatch.setColorAt(index, instanceColor.set(course.accentColor));
   });
   boostBatch.instanceMatrix.setUsage(THREE.StaticDrawUsage);
   boostBatch.instanceMatrix.needsUpdate = true;
@@ -374,10 +391,11 @@ export function buildDrivingCourses({
         zone.normal,
         zone.tangent,
         new THREE.Vector3(course.width * 1.45, 0.14 + slat * 0.12, 0.82),
+        matrixScratch,
         0,
         slat * 0.17
       ));
-      rampBatch.setColorAt(rampInstance, new THREE.Color(course.accentColor).lerp(new THREE.Color(0x4b241c), 0.48));
+      rampBatch.setColorAt(rampInstance, instanceColor.set(course.accentColor).lerp(rampBaseColor, 0.48));
       rampInstance++;
     }
   });
@@ -395,6 +413,26 @@ export function buildDrivingCourses({
     prompt: '',
     gateFlash: 0,
   };
+  const updateResult = {
+    event: '',
+    boost: 0,
+    jumpImpulse: 0,
+    prompt: '',
+    activeCourse: null,
+    lapTime: 0,
+    nextCheckpoint: 0,
+  };
+
+  function writeUpdateResult(event = '', boost = 0, jumpImpulse = 0) {
+    updateResult.event = event;
+    updateResult.boost = boost;
+    updateResult.jumpImpulse = jumpImpulse;
+    updateResult.prompt = state.prompt;
+    updateResult.activeCourse = state.activeCourse;
+    updateResult.lapTime = state.lapTime;
+    updateResult.nextCheckpoint = state.nextCheckpoint;
+    return updateResult;
+  }
 
   function reset() {
     state.activeCourse = null;
@@ -405,15 +443,21 @@ export function buildDrivingCourses({
   }
 
   function update({ normal, speed = 0, grounded = true, time = 0, dt = 0 } = {}) {
-    boostRecords.forEach(({ zone }) => { zone.cooldown = Math.max(0, zone.cooldown - dt); });
-    rampRecords.forEach(({ zone }) => { zone.cooldown = Math.max(0, zone.cooldown - dt); });
+    for (let index = 0; index < boostRecords.length; index++) {
+      const zone = boostRecords[index].zone;
+      zone.cooldown = Math.max(0, zone.cooldown - dt);
+    }
+    for (let index = 0; index < rampRecords.length; index++) {
+      const zone = rampRecords[index].zone;
+      zone.cooldown = Math.max(0, zone.cooldown - dt);
+    }
     boostMaterial.emissiveIntensity = 1.8 + Math.sin(time * 8.5) * 0.44 + state.gateFlash * 1.2;
     beaconMaterial.opacity = 0.32 + (Math.sin(time * 1.7) * 0.5 + 0.5) * 0.18;
     gateMaterial.emissiveIntensity = 0.4 + Math.sin(time * 2.6) * 0.12 + state.gateFlash * 1.45;
     state.gateFlash = Math.max(0, state.gateFlash - dt * 2.8);
     if (!normal) {
       state.prompt = '';
-      return { prompt: '' };
+      return writeUpdateResult();
     }
 
     let event = '';
@@ -476,25 +520,38 @@ export function buildDrivingCourses({
       const course = state.activeCourse;
       state.prompt = `${course.name} · GATE ${state.nextCheckpoint}/${course.checkpoints.length} · ${state.lapTime.toFixed(1)} SEC`;
     } else {
-      let nearest = null;
+      let nearestCourse = null;
+      let nearestDistance = Infinity;
       for (const course of courses) {
         const distance = arcDistance(normal, course.checkpoints[0].normal, planetRadius);
-        if (distance < 17 && (!nearest || distance < nearest.distance)) nearest = { course, distance };
+        if (distance < 17 && distance < nearestDistance) {
+          nearestCourse = course;
+          nearestDistance = distance;
+        }
       }
-      state.prompt = nearest
-        ? `${nearest.course.name} START · ${Math.ceil(nearest.distance)} M · ${nearest.course.recommended}`
+      state.prompt = nearestCourse
+        ? `${nearestCourse.name} START · ${Math.ceil(nearestDistance)} M · ${nearestCourse.recommended}`
         : '';
     }
 
-    return {
-      event,
-      boost,
-      jumpImpulse,
-      prompt: state.prompt,
-      activeCourse: state.activeCourse,
-      lapTime: state.lapTime,
-      nextCheckpoint: state.nextCheckpoint,
-    };
+    return writeUpdateResult(event, boost, jumpImpulse);
+  }
+
+  function dispose() {
+    courses.forEach((course) => {
+      course.road.geometry.dispose();
+      course.road.material.dispose();
+    });
+    gateBatch.geometry.dispose();
+    beaconBatch.geometry.dispose();
+    markerBatch.geometry.dispose();
+    boostBatch.geometry.dispose();
+    rampBatch.geometry.dispose();
+    gateMaterial.dispose();
+    beaconMaterial.dispose();
+    markerMaterial.dispose();
+    boostMaterial.dispose();
+    rampMaterial.dispose();
   }
 
   return {
@@ -508,6 +565,7 @@ export function buildDrivingCourses({
     state,
     update,
     reset,
+    dispose,
   };
 }
 

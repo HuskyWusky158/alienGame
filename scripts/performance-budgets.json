@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "buildDirectory": "dist",
+  "limits": {
+    "largestJavaScriptBytes": 950000,
+    "largestJavaScriptGzipBytes": 275000,
+    "initialJavaScriptGzipBytes": 275000,
+    "totalJavaScriptGzipBytes": 350000,
+    "totalCssGzipBytes": 10000,
+    "totalBuildGzipBytes": 375000
+  },
+  "targets": {
+    "initialJavaScriptGzipBytes": 200000
+  }
+}

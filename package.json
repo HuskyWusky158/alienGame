@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js",
+    "perf:budget": "node scripts/check-performance-budgets.mjs",
+    "perf:check": "npm run build && npm run perf:budget"
   },
   "devDependencies": {
     "vite": "^8.1.1"
